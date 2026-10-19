@@ -5,12 +5,12 @@ import {mkdir} from 'node:fs/promises';
 import {createServer as createVite} from 'vite';
 import {PGlite} from '@electric-sql/pglite';
 import {createHandler} from '../server/handler.ts';
-import {pgliteDb,fileBlobs,applyMigrations} from './local-deps.mjs';
+import {pgliteDb,fileBlobs} from './local-deps.mjs';
 
 await mkdir('.local-data',{recursive:true});
 const port=Number(process.env.PORT||5173);
 const adminPassword=process.env.ADMIN_PASSWORD||'senha-local-dev';
-const handle=createHandler({db:pgliteDb(await applyMigrations(new PGlite('.local-data/pg'))),blobs:await fileBlobs('.local-data/blobs'),adminPassword});
+const handle=createHandler({db:pgliteDb(new PGlite('.local-data/pg')),blobs:await fileBlobs('.local-data/blobs'),adminPassword});
 const vite=await createVite({server:{middlewareMode:true},appType:'spa'});
 
 createServer(async(req,res)=>{

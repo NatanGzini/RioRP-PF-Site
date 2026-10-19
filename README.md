@@ -8,7 +8,7 @@ Versão base para hospedagem na **Netlify**:
 |---|---|
 | Site | Vite + React (`src/`) → pasta `dist/` |
 | API | Netlify Function `netlify/functions/portal.mts` em `/api/portal` (lógica em `server/handler.ts`) |
-| Banco | Netlify Database (Postgres). Criado no deploy; tabelas em `netlify/database/migrations/` |
+| Banco | Postgres na Neon (plano grátis, fora dos créditos da Netlify). Tabelas criadas automaticamente no primeiro acesso |
 | PDFs | Netlify Blobs (store `academia`). Nada a configurar |
 | Login | Alunos/agentes: ID + nome in-game · Instrutores: ID + senha · Admin: usuário `admin` + `ADMIN_PASSWORD` |
 
@@ -25,8 +25,8 @@ Versão base para hospedagem na **Netlify**:
 3. **Crie o site na Netlify:** *Add new project → Import an existing project → GitHub* e escolha o repositório. As configurações de build já vêm do `netlify.toml` (comando `npm run build`, pasta `dist`), não altere nada.
 4. **Defina a senha do administrador:** *Project configuration → Environment variables → Add a variable*
    - `ADMIN_PASSWORD` = uma senha forte com **pelo menos 12 caracteres** (se for mais curta, o login de admin fica desativado).
-5. **Banco de dados:** nada a fazer. O projeto usa `@netlify/database`, então a Netlify cria o banco no deploy e aplica os arquivos de `netlify/database/migrations/` antes de publicar. Ele aparece em *Data & Storage → Database*. O Netlify Database consome créditos do plano conforme o uso.
-   - Para mudar tabelas no futuro, crie um **novo** arquivo `0002_descricao.sql` (nunca edite um que já foi aplicado).
+5. **Banco de dados (Neon, grátis):** crie uma conta em https://console.neon.tech, crie um projeto e copie a *connection string* (botão **Connect**). Na Netlify, crie a variável `DATABASE_URL` com esse valor. As tabelas são criadas sozinhas no primeiro acesso ao site (`server/schema.ts`).
+   - O banco fica fora dos créditos da Netlify; a Neon desliga o banco quando ninguém está usando e liga de novo na próxima visita (o primeiro acesso pode levar 1 ou 2 segundos).
 6. Faça um novo deploy (*Deploys → Trigger deploy*) depois de definir as variáveis, abra o site e entre em **Academia → Acesso de instrutores** com o usuário `admin`.
 
 A partir daí, cada `git push` na branch `main` publica uma nova versão.
@@ -65,9 +65,9 @@ npm run build
 index.html, src/          Frontend (portal.tsx, globals.css)
 public/brand/             Emblema
 server/handler.ts         Regras da API (independente da Netlify)
+server/schema.ts          Tabelas Postgres
 server/passwords.ts       Hash de senhas (PBKDF2)
-netlify/functions/        Adaptador Netlify (Database + Blobs)
-netlify/database/migrations/  Tabelas Postgres
+netlify/functions/        Adaptador Netlify (Neon + Blobs)
 scripts/dev.mjs           Servidor local
 tests/integration.mjs     Testes da API
 ```

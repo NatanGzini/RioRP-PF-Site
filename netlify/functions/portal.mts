@@ -1,24 +1,19 @@
-import {getDatabase} from '@netlify/database';
+import {neon} from '@neondatabase/serverless';
 import {getStore} from '@netlify/blobs';
-import {createHandler,type Db} from '../../server/handler.ts';
+import {createHandler} from '../../server/handler.ts';
 
+// Banco Postgres na Neon (plano grátis), fora dos créditos da Netlify.
+// DATABASE_URL é a connection string do projeto Neon, definida nas variáveis de ambiente da Netlify.
+const databaseUrl=process.env.DATABASE_URL;
 let handler:((req:Request)=>Promise<Response>)|undefined;
 
-// Netlify Database: provisionado automaticamente no deploy; as tabelas vêm de netlify/database/migrations/.
-function connect():Db{
- const db=getDatabase();
- return db.driver==='serverless'
-  ?{query:(text,params=[])=>db.httpClient.query(text,params,{arrayMode:false,fullResults:false})}
-  :{query:async(text,params=[])=>(await db.pool.query(text,params)).rows};
-}
-
 export default async function portal(req:Request){
+ if(!databaseUrl)return Response.json({error:'Banco de dados não configurado.'},{status:503});
  if(!handler){
-  let db:Db;
-  try{db=connect()}catch(e){console.error(e);return Response.json({error:'Banco de dados não configurado.'},{status:503})}
+  const sql=neon(databaseUrl);
   const store=getStore({name:'academia',consistency:'strong'});
   handler=createHandler({
-   db,
+   db:{query:(text,params=[])=>sql.query(text,params)},
    blobs:{
     stream:key=>store.get(key,{type:'stream'}),
     buffer:key=>store.get(key,{type:'arrayBuffer'}),

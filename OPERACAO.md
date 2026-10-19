@@ -14,7 +14,7 @@ O cadastro e o login do personagem usam somente ID e nome in-game, conforme soli
 
 ## Materiais e provas
 
-Os PDFs (até 20 MB) ficam no Netlify Blobs e só podem ser baixados por usuários matriculados autorizados. O envio é feito em partes de 3 MB por causa do limite de requisição das funções Netlify. Alunos acessam apenas a Bíblia Geral. Agentes e instrutores acessam os cursos. Os registros ficam no Postgres (Netlify Database).
+Os PDFs (até 20 MB) ficam no Netlify Blobs e só podem ser baixados por usuários matriculados autorizados. O envio é feito em partes de 3 MB por causa do limite de requisição das funções Netlify. Alunos acessam apenas a Bíblia Geral. Agentes e instrutores acessam os cursos. Os registros ficam no Postgres da Neon (variável `DATABASE_URL`).
 
 O leitor registra pulsos a cada cinco segundos enquanto a aba está visível. O servidor acumula no máximo trinta segundos por página, rejeita intervalos longos e mantém uma página ativa por matrícula. Troque de página pelas setas do portal para registrar corretamente o progresso; a navegação interna do visualizador PDF do navegador não altera a página registrada. Este mecanismo mede permanência, não compreensão do conteúdo.
 
@@ -28,4 +28,4 @@ O formulário não pede identificação e não salva a identidade da conta junto
 
 ## Desenvolvimento
 
-Veja o README.md: `npm run dev` roda o portal localmente com banco embutido; `npm test`, `npm run typecheck` e `npm run build` são as verificações. As tabelas ficam em `netlify/database/migrations/`; para alterá-las, crie um novo arquivo numerado. Não publique identidades ou dados de teste. `ADMIN_PASSWORD` fica nas variáveis de ambiente da Netlify, nunca no código.
+Veja o README.md: `npm run dev` roda o portal localmente com banco embutido; `npm test`, `npm run typecheck` e `npm run build` são as verificações. As tabelas são criadas automaticamente a partir de `server/schema.ts`. Não publique identidades ou dados de teste. `ADMIN_PASSWORD` fica nas variáveis de ambiente da Netlify, nunca no código.
