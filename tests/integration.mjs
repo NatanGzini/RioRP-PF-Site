@@ -2,10 +2,10 @@
 import assert from 'node:assert/strict';
 import {PGlite} from '@electric-sql/pglite';
 import {createHandler,CHUNK_SIZE} from '../server/handler.ts';
-import {pgliteDb,memoryBlobs} from '../scripts/local-deps.mjs';
+import {pgliteDb,memoryBlobs,applyMigrations} from '../scripts/local-deps.mjs';
 
 const base='http://portal.test',ADMIN='senha-admin-de-teste';
-const pg=new PGlite();
+const pg=await applyMigrations(new PGlite());
 const handle=createHandler({db:pgliteDb(pg),blobs:memoryBlobs(),adminPassword:ADMIN});
 const call=async(body,{cookie,origin=base}={})=>{
  const headers={origin,...(cookie?{cookie}:{})};
@@ -98,7 +98,7 @@ assert.equal((await call({action:'staff-login',user:'admin',password:ADMIN})).st
 ok(await call({action:'logout'},{cookie:student}),'logout');assert.equal((await state(student)).me,null);
 
 // ADMIN_PASSWORD curta não habilita o administrador
-const weak=createHandler({db:pgliteDb(new PGlite()),blobs:memoryBlobs(),adminPassword:'curta'});
+const weak=createHandler({db:pgliteDb(await applyMigrations(new PGlite())),blobs:memoryBlobs(),adminPassword:'curta'});
 const weakLogin=await weak(new Request(base+'/api/portal',{method:'POST',headers:{origin:base,'content-type':'application/json'},body:JSON.stringify({action:'staff-login',user:'admin',password:'curta'})}));
 assert.equal(weakLogin.status,401);
 

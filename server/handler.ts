@@ -1,6 +1,6 @@
 // API do portal (/api/portal). Independe da Netlify: o banco e o armazenamento de PDFs são injetados,
-// o que permite rodar a mesma lógica com Neon + Netlify Blobs em produção e PGlite + memória localmente.
-import {SCHEMA} from './schema.ts';
+// o que permite rodar a mesma lógica com Netlify Database + Blobs em produção e PGlite + memória localmente.
+// As tabelas vêm de netlify/database/migrations/ (aplicadas pela Netlify a cada deploy).
 import {hashPassword,verifyPassword,sha256Hex,sameSecret} from './passwords.ts';
 
 export type Db={query(sql:string,params?:unknown[]):Promise<any[]>};
@@ -33,12 +33,8 @@ export function createHandler({db,blobs,adminPassword}:Deps){
  const first=async(sql:string,...v:unknown[])=>(await query(sql,v))[0];
  const all=(sql:string,...v:unknown[])=>query(sql,v);
  const run=(sql:string,...v:unknown[])=>query(sql,v);
- let ready:Promise<void>|undefined;
- const migrate=async()=>{for(const s of SCHEMA)await db.query(s)};
- const ensureSchema=()=>ready??=migrate().catch(async()=>{await migrate()}).catch(e=>{ready=undefined;throw e});
 
  return async function handle(req:Request):Promise<Response>{try{
- await ensureSchema();
  const url=new URL(req.url),now=Date.now();
  const token=req.headers.get('cookie')?.split(';').map(v=>v.trim()).find(v=>v.startsWith('pf_session='))?.slice(11);
  const key=token&&/^[a-f0-9-]{72}$/.test(token)?await sessionKey(token):null;

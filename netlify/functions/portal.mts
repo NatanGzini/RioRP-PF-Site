@@ -1,19 +1,24 @@
-// @netlify/neon também sinaliza à Netlify que o site usa o Netlify DB (banco criado automaticamente).
-import {neon} from '@netlify/neon';
+import {getDatabase} from '@netlify/database';
 import {getStore} from '@netlify/blobs';
-import {createHandler} from '../../server/handler.ts';
+import {createHandler,type Db} from '../../server/handler.ts';
 
-// NETLIFY_DATABASE_URL é criada pela extensão Netlify DB; DATABASE_URL permite usar um Neon próprio.
-const databaseUrl=process.env.NETLIFY_DATABASE_URL||process.env.DATABASE_URL;
 let handler:((req:Request)=>Promise<Response>)|undefined;
 
+// Netlify Database: provisionado automaticamente no deploy; as tabelas vêm de netlify/database/migrations/.
+function connect():Db{
+ const db=getDatabase();
+ return db.driver==='serverless'
+  ?{query:(text,params=[])=>db.httpClient.query(text,params,{arrayMode:false,fullResults:false})}
+  :{query:async(text,params=[])=>(await db.pool.query(text,params)).rows};
+}
+
 export default async function portal(req:Request){
- if(!databaseUrl)return Response.json({error:'Banco de dados não configurado.'},{status:503});
  if(!handler){
-  const sql=neon(databaseUrl);
+  let db:Db;
+  try{db=connect()}catch(e){console.error(e);return Response.json({error:'Banco de dados não configurado.'},{status:503})}
   const store=getStore({name:'academia',consistency:'strong'});
   handler=createHandler({
-   db:{query:(text,params=[])=>sql.query(text,params)},
+   db,
    blobs:{
     stream:key=>store.get(key,{type:'stream'}),
     buffer:key=>store.get(key,{type:'arrayBuffer'}),
