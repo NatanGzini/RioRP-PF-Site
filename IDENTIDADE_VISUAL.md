@@ -18,4 +18,4 @@ A marca aparece no cabeçalho, destaque principal, rodapé, documentos e ícone 
 
 Três agentes foram consultados: identidade visual e responsividade; acessibilidade e experiência; pesquisa de fontes oficiais da marca. Aplicações: preservação da marca, contraste e fontes maiores, hero responsivo com emblema integral, alvos de toque de 44px, campos de 16px em dispositivos móveis, menu com estado acessível, navegação para o conteúdo, barras de progresso semânticas, controle de foco e Escape em modais e respeito a movimento reduzido.
 
-O plugin Product Design foi localizado e sugerido. Ele não foi utilizado sem confirmação de conexão. A implementação e publicação usam Sites.
+O plugin Product Design foi instalado e utilizado em uma auditoria com novas capturas das telas publicadas. A revisão e os ajustes estão documentados em AUDITORIA_PRODUCT_DESIGN.md. A implementação e publicação usam Sites.

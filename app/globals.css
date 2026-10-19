@@ -24,3 +24,5 @@ nav{gap:25px}nav button{font-size:13px;color:#c5c0b5}.nav-active:after{backgroun
 @media print{body>#portal-content{display:none!important}.document img{print-color-adjust:exact}.document-wrap{overflow:visible}.document{box-shadow:none}}
 .radio input{min-height:0;width:18px;height:18px;flex-shrink:0}.form .radio{min-height:44px;cursor:pointer}.modal-error{color:#ffbdb1!important;background:#462820;border:1px solid #a76a55;padding:12px;border-radius:4px}
 @media(min-width:761px) and (max-width:960px){header{height:96px}.access{margin-left:auto}.access span{display:inline}.mobile-menu{display:grid;place-items:center}nav{display:none}nav.open{display:flex;position:absolute;top:96px;left:0;right:0;height:auto;align-items:stretch;flex-direction:column;padding:20px;background:#11110d;border-bottom:1px solid #62502d;gap:0}nav button{min-height:46px;text-align:left;padding:10px}.nav-active:after{bottom:5px;left:10px;width:28px}}
+
+.form-heading h2{font-size:18px;line-height:1.5;margin:0;letter-spacing:0}#details-help{margin-top:-8px}
