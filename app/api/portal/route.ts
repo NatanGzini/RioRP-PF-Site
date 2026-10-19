@@ -4,6 +4,9 @@ export const dynamic='force-dynamic';
 const json=(v:unknown,status=200)=>Response.json(v,{status,headers:{'Cache-Control':'no-store'}});
 const fail=(s:string)=>{throw new Error(s)};
 const str=(v:unknown,min=1,max=200)=>typeof v==='string'&&v.trim().length>=min&&v.length<=max?v.trim():fail('Preencha os campos corretamente.');
+const normalizeName=(s:string)=>s.normalize('NFKC').trim().replace(/\s+/g,' ').toLocaleLowerCase('pt-BR');
+const sessionKey=async(token:string)=>'session:'+Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(token)))).map(n=>n.toString(16).padStart(2,'0')).join('');
+const cookie=(req:Request,value:string,age:number)=>`pf_session=${value}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${age}${new URL(req.url).protocol==='https:'?'; Secure':''}`;
 export async function GET(req:Request){return handle(req)}
 export async function POST(req:Request){return handle(req)}
 async function handle(req:Request){try{
@@ -14,7 +17,11 @@ async function handle(req:Request){try{
  const user=await getChatGPTUser();
  const adminEmail=(env as unknown as Record<string,string>).ADMIN_EMAIL;
  const admin=!!user&&!!adminEmail&&user.email.toLowerCase()===adminEmail.toLowerCase();
- let me=user?await first('SELECT id,name,role FROM members WHERE user_id=?',user.userId):null;
+ let me=user?await first("SELECT id,name,role FROM members WHERE user_id=? AND role='instrutor'",user.userId):null;
+ if(user&&!me){const mapping=await first('SELECT value FROM settings WHERE key=?','instructor-email:'+user.email.toLowerCase());if(mapping)me=await first("SELECT id,name,role FROM members WHERE id=? AND role='instrutor'",mapping.value);}
+ const token=req.headers.get('cookie')?.split(';').map(v=>v.trim()).find(v=>v.startsWith('pf_session='))?.slice(11);
+ const key=token&&/^[a-f0-9-]{72}$/.test(token)?await sessionKey(token):null;
+ if(!me&&key){const row=await first('SELECT value FROM settings WHERE key=?',key);if(row){const session=JSON.parse(row.value);if(session.expires>Date.now())me=await first("SELECT id,name,role FROM members WHERE id=? AND role IN ('aluno','agente')",session.id);else await run('DELETE FROM settings WHERE key=?',key);}}
  if(admin)me={id:'admin',name:'Comando da academia',role:'instrutor'};
  const instructor=me?.role==='instrutor'; const now=Date.now();
  if(req.method==='GET'){
@@ -35,33 +42,41 @@ async function handle(req:Request){try{
  if(Number(req.headers.get('content-length')||0)>22000000)return json({error:'Arquivo muito grande.'},413);
  const form=req.headers.get('content-type')?.includes('multipart/form-data')?await req.formData():null;
  const b=form?{action:'course'}:await req.json() as any;
+ if(b.action==='login'){
+  const id=str(b.id,1,30),name=str(b.name,2,100);
+  const member=await first("SELECT id,name FROM members WHERE id=? AND role IN ('aluno','agente')",id);
+  if(!member||normalizeName(member.name)!==normalizeName(name))return json({error:'ID ou nome in-game não conferem com o cadastro. Consulte seu instrutor.'},401);
+  const newToken=crypto.randomUUID()+crypto.randomUUID();
+  if(key)await run('DELETE FROM settings WHERE key=?',key);
+  await run('INSERT INTO settings VALUES (?,?)',await sessionKey(newToken),JSON.stringify({id:member.id,expires:now+604800000}));
+  const response=json({message:'Acesso realizado. Bons estudos!'});response.headers.set('Set-Cookie',cookie(req,newToken,604800));return response;
+ }
+ if(b.action==='logout'){
+  if(key)await run('DELETE FROM settings WHERE key=?',key);
+  const response=json({message:'Você saiu da academia.'});response.headers.set('Set-Cookie',cookie(req,'',0));return response;
+ }
  if(b.action==='report'){
   const id=crypto.randomUUID(); await run('INSERT INTO reports VALUES (?,?,?,?,?)',id,str(b.organization,2,120),str(b.location,2,200),str(b.details,30,5000),now);
   return json({message:'Denúncia recebida. Protocolo: '+id.slice(0,8).toUpperCase()});
  }
- if(!user)return json({error:'Entre na sua conta para continuar.'},401);
- if(b.action==='activate'){
-  if(me)return json({error:'Sua conta já está vinculada.'},400);
-  const invite=str(b.code,20,100);
-  const result=await run('UPDATE members SET user_id=?,invite=NULL WHERE invite=? AND user_id IS NULL',user.userId,invite);
-  if(!result.meta.changes)fail('Código inválido ou já utilizado. Solicite um novo ao instrutor.');
-  return json({message:'Matrícula ativada.'});
- }
+ if(!user&&!me)return json({error:'Entre com seu ID e nome in-game para continuar.'},401);
  if(!me)return json({error:'Sua matrícula precisa ser cadastrada por um instrutor.'},403);
- if(['member','role','invite','course','settings'].includes(b.action)){
+ if(['member','role','course','settings'].includes(b.action)){
   if(!instructor)return json({error:'Apenas instrutores podem realizar esta ação.'},403);
   if(b.action==='member'){
-   const code=crypto.randomUUID(); await run("INSERT INTO members (id,name,role,invite,created) VALUES (?,?,'aluno',?,?)",str(b.id,1,30),str(b.name,2,100),code,now);
-   return json({message:'Aluno cadastrado. Entregue este código em particular: '+code,code});
-  }
-  if(b.action==='invite'){
-   const code=crypto.randomUUID();const r=await run('UPDATE members SET invite=? WHERE id=? AND user_id IS NULL',code,str(b.id));if(!r.meta.changes)fail('Matrícula já vinculada ou não encontrada.');return json({message:'Novo código: '+code});
+   await run("INSERT INTO members (id,name,role,created) VALUES (?,?,'aluno',?)",str(b.id,1,30),str(b.name,2,100),now);
+   return json({message:'Aluno cadastrado. Ele já pode entrar com o ID e o nome in-game informados.'});
   }
   if(b.action==='role'){
    if(!['aluno','agente','instrutor'].includes(b.role))fail('Perfil inválido.');
    if(b.role==='instrutor'&&!admin)fail('Somente o administrador pode nomear instrutores.');
    const target=await first('SELECT role FROM members WHERE id=?',str(b.id));
    if(target?.role==='instrutor'&&!admin)fail('Somente o administrador altera instrutores.');
+   if(b.role==='instrutor'){
+    const email=str(b.email,5,254).toLowerCase();if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))fail('Informe o e-mail ChatGPT do instrutor.');
+    const mapped=await first('SELECT value FROM settings WHERE key=?','instructor-email:'+email);if(mapped&&mapped.value!==b.id)fail('Esse e-mail já está associado a outro instrutor.');
+    await run('INSERT INTO settings VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value','instructor-email:'+email,b.id);
+   }
    await run('UPDATE members SET role=? WHERE id=?',b.role,b.id);return json({message:'Perfil atualizado.'});
   }
   if(b.action==='settings'){

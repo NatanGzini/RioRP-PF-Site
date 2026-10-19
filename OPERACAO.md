@@ -5,12 +5,12 @@ Aplicação de roleplay com página pública, denúncias, academia e painel de i
 ## Primeira utilização
 
 1. Entre com a conta ChatGPT cujo e-mail corresponde à variável de ambiente `ADMIN_EMAIL`, configurada na hospedagem.
-2. Abra **Instrutores**. Cadastre o ID e o nome in-game do personagem e entregue o código de ativação em uma conversa privada no Discord.
-3. O aluno entra com a própria conta ChatGPT, abre **Academia** e informa o código. O código é de uso único. Se perdido antes da ativação, gere outro na lista de matrículas.
+2. Abra **Instrutores**. Cadastre o ID e o nome in-game do personagem e salve a matrícula. Nenhum código é gerado.
+3. O aluno abre **Academia** e entra com o ID e o nome in-game cadastrados. Não há código, senha ou vínculo de conta ChatGPT no login de alunos/agentes do portal. Maiúsculas/minúsculas e espaços extras no nome são desconsiderados.
 4. Publique a Bíblia Geral com seu PDF e o número exato de páginas. Há uma única Bíblia Geral para a formação inicial.
 5. Após o exame prático na cidade, um instrutor pode promover o aluno a agente. Só o administrador nomeia instrutores.
 
-O cadastro do personagem tem somente ID e nome in-game. A autenticação da hospedagem é separada: ID e nome não funcionam como senha.
+O cadastro e o login do personagem usam somente ID e nome in-game, conforme solicitado. Quem conhece os dois dados pode acessar aquela matrícula. A sessão usa cookie HttpOnly, validade de sete dias e revogação ao sair. O servidor não concede privilégios de instrutor por esse login. Instrutores entram com ChatGPT; ao nomear um novo instrutor, o administrador associa o e-mail de sua conta. A barreira de acesso privado da hospedagem permanece independente do login do portal.
 
 ## Materiais e provas
 

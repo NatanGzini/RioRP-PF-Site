@@ -3,7 +3,7 @@ import {execFileSync} from 'node:child_process';
 const base='http://127.0.0.1:5173';
 const prefix='qa-'+Date.now(),member=prefix+'-instructor',course=prefix+'-course',student=prefix+'-student';
 const sql=q=>execFileSync(process.execPath,['--import','./scripts/sites-env.mjs','./node_modules/wrangler/bin/wrangler.js','d1','execute','DB','--local','--config','dist/server/wrangler.json','--persist-to','.wrangler/state','--command',q],{stdio:'pipe'});
-const send=async(body,auth=true,origin=base)=>{const r=await fetch(base+'/api/portal',{method:'POST',headers:{'content-type':'application/json',origin,...(auth?{cookie:'__sites_local_auth=1'}:{})},body:JSON.stringify(body)});const raw=await r.text();let bodyResult;try{bodyResult=JSON.parse(raw)}catch{bodyResult={error:raw}}return {status:r.status,body:bodyResult}};
+const send=async(body,auth=true,origin=base)=>{const r=await fetch(base+'/api/portal',{method:'POST',headers:{'content-type':'application/json',origin,...(auth?{cookie:typeof auth==='string'?auth:'__sites_local_auth=1'}:{})},body:JSON.stringify(body)});const raw=await r.text();let bodyResult;try{bodyResult=JSON.parse(raw)}catch{bodyResult={error:raw}}return {status:r.status,body:bodyResult,cookie:r.headers.get("set-cookie")?.split(";")[0]}};
 const state=async()=>{const r=await fetch(base+'/api/portal',{headers:{cookie:'__sites_local_auth=1'}});return r.json()};
 let reportId;
 try{
@@ -12,8 +12,18 @@ try{
  assert.equal((await send({action:'report',organization:'QA',location:'QA',details:'Curto'},false)).status,400);
  sql(`INSERT INTO members (id,name,role,user_id,created) VALUES ('${member}','Instrutor QA','instrutor','local_seedy',0); INSERT INTO courses VALUES ('${course}','Curso QA','curso',1,'qa.pdf','[{"text":"Questao QA?","options":["A","B","C","D"],"answer":0}]',70);`);
  assert.equal((await state()).me.role,'instrutor');
- const created=await send({action:'member',id:student,name:'Aluno QA'});assert.equal(created.status,200);assert.ok(created.body.code);
+ const created=await send({action:'member',id:student,name:'Aluno QA'});assert.equal(created.status,200);assert.equal(created.body.code,undefined);
  assert.equal((await send({action:'member',id:student,name:'Aluno QA'})).status,400);
+ assert.equal((await send({action:'login',id:student,name:'Nome errado'},false)).status,401);
+ assert.equal((await send({action:'login',id:prefix+'-missing',name:'Aluno QA'},false)).status,401);
+ assert.equal((await send({action:'login',id:member,name:'Instrutor QA'},false)).status,401);
+ const login=await send({action:'login',id:student,name:'  aluno   qa  '},false);assert.equal(login.status,200);assert.ok(login.cookie);
+ const studentState=await (await fetch(base+'/api/portal',{headers:{cookie:login.cookie}})).json();assert.equal(studentState.me.id,student);assert.equal(studentState.me.role,'aluno');assert.equal(studentState.reports.length,0);
+ assert.equal((await send({action:'member',id:prefix+'-blocked',name:'Bloqueado'},login.cookie)).status,403);
+ assert.equal((await send({action:'begin',course,page:1},login.cookie)).status,403);
+ const badCookie=login.cookie.slice(0,-1)+(login.cookie.endsWith('a')?'b':'a');const bad=await (await fetch(base+'/api/portal',{headers:{cookie:badCookie}})).json();assert.equal(bad.me,null);
+ assert.equal((await send({action:'logout'},login.cookie)).status,200);const afterLogout=await (await fetch(base+'/api/portal',{headers:{cookie:login.cookie}})).json();assert.equal(afterLogout.me,null);
+
  const report=await send({action:'report',organization:prefix,location:'Ambiente de testes',details:'Relato ficticio de teste automatizado local, sem envolvidos reais.'},false);assert.equal(report.status,200);
  const list=await state();reportId=list.reports.find(r=>r.organization===prefix).id;assert.ok(!('user_id' in list.reports[0]));
  assert.equal((await send({action:'role',id:student,role:'instrutor'})).status,400);
@@ -29,10 +39,10 @@ try{
  const retry=await send({action:'exam',course});const success=await send({action:'submit',course,attempt:retry.body.id,answers:[0]});assert.equal(success.body.passed,true);assert.equal(success.body.score,100);
  assert.equal((await send({action:'submit',course,attempt:retry.body.id,answers:[0]})).status,400);
  sql(`UPDATE members SET role='aluno' WHERE id='${member}';`);
- const restricted=await state();assert.equal(restricted.reports.length,0);assert.equal(restricted.members.length,0);assert.equal(restricted.courses.length,0);
+ const restricted=await state();assert.equal(restricted.me,null);assert.equal(restricted.reports.length,0);assert.equal(restricted.members.length,0);assert.equal(restricted.courses.length,0);
  assert.equal((await send({action:'begin',course,page:1})).status,403);
  assert.equal((await send({action:'member',id:prefix+'-blocked',name:'Bloqueado'})).status,403);
- console.log('PASS: anonymous access, origin validation, report privacy, instructor-only enrollment, duplicate IDs, instructor privilege boundary, reading timer, exam lock, hidden answers, persistent deadline, expiration, grading, duplicate submission, student course isolation.');
+ console.log('PASS: ID/name login, name normalization, invalid ID/name rejection, instructor isolation, tampered cookie rejection, logout revocation, anonymous access, origin validation, report privacy, instructor-only enrollment, duplicate IDs, instructor privilege boundary, reading timer, exam lock, hidden answers, persistent deadline, expiration, grading, duplicate submission, student course isolation.');
 }finally{
  sql(`DELETE FROM reading WHERE member='${member}'; DELETE FROM attempts WHERE member='${member}'; DELETE FROM courses WHERE id='${course}'; DELETE FROM members WHERE id IN ('${member}','${student}'); DELETE FROM settings WHERE key='active:${member}'; DELETE FROM reports WHERE organization='${prefix}';`);
 }
