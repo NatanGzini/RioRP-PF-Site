@@ -1,0 +1,7 @@
+import {sqliteTable,text,integer} from 'drizzle-orm/sqlite-core';
+export const members=sqliteTable('members',{id:text('id').primaryKey(),name:text('name').notNull(),role:text('role').notNull(),userId:text('user_id').unique(),invite:text('invite').unique(),created:integer('created').notNull()});
+export const courses=sqliteTable('courses',{id:text('id').primaryKey(),title:text('title').notNull(),kind:text('kind').notNull(),pages:integer('pages').notNull(),file:text('file').notNull(),questions:text('questions').notNull(),pass:integer('pass').notNull()});
+export const reading=sqliteTable('reading',{id:text('id').primaryKey(),member:text('member').notNull(),course:text('course').notNull(),page:integer('page').notNull(),started:integer('started').notNull(),last:integer('last').notNull(),seconds:integer('seconds').notNull(),done:integer('done').notNull()});
+export const attempts=sqliteTable('attempts',{id:text('id').primaryKey(),member:text('member').notNull(),course:text('course').notNull(),started:integer('started').notNull(),submitted:integer('submitted'),score:integer('score'),passed:integer('passed').notNull()});
+export const reports=sqliteTable('reports',{id:text('id').primaryKey(),organization:text('organization').notNull(),location:text('location').notNull(),details:text('details').notNull(),created:integer('created').notNull()});
+export const settings=sqliteTable('settings',{key:text('key').primaryKey(),value:text('value').notNull()});
