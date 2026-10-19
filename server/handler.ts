@@ -137,10 +137,11 @@ export function createHandler({db,blobs,adminPassword}:Deps){
   }
   // action 'course': junta as partes enviadas e publica o material.
   const title=str(b.title,3,120),kind=b.kind,pages=Number(b.pages),pass=Number(b.pass),parts=Number(b.parts),upload=String(b.upload);
-  if(!['biblia','curso'].includes(String(kind))||!Number.isInteger(pages)||pages<1||pages>500||!Number.isInteger(pass)||pass<1||pass>100)fail('Revise tipo, páginas e nota mínima.');
+  // biblia: formação inicial (alunos) · curso: agentes, com prova online · leitura: apostila de agentes sem prova (avaliação in game)
+  if(!['biblia','curso','leitura'].includes(String(kind))||!Number.isInteger(pages)||pages<1||pages>500||!Number.isInteger(pass)||pass<1||pass>100)fail('Revise tipo, páginas e nota mínima.');
   if(!/^[a-f0-9-]{36}$/.test(upload)||!Number.isInteger(parts)||parts<1||parts>MAX_PARTS)fail('Selecione um PDF de até 20 MB.');
   if(kind==='biblia'&&await first("SELECT id FROM courses WHERE kind='biblia'"))fail('A Bíblia Geral já está cadastrada.');
-  let questions:any;try{questions=JSON.parse(String(b.questions||'[]'))}catch{fail('O JSON das questões é inválido.')}
+  let questions:any;try{questions=kind==='curso'?JSON.parse(String(b.questions||'[]')):[]}catch{fail('O JSON das questões é inválido.')}
   if(!Array.isArray(questions)||questions.length>50||(kind==='curso'&&!questions.length))fail('Cadastre entre 1 e 50 questões para o curso.');
   for(const q of questions)if(typeof q?.text!=='string'||q.text.length<5||!Array.isArray(q.options)||q.options.length!==4||q.options.some((o:any)=>typeof o!=='string'||!o.trim())||!Number.isInteger(q.answer)||q.answer<0||q.answer>3)fail('Cada questão precisa de texto, quatro opções e resposta entre 0 e 3.');
   const chunks:ArrayBuffer[]=[];
@@ -172,7 +173,7 @@ export function createHandler({db,blobs,adminPassword}:Deps){
  const read=await first('SELECT COUNT(*)::int AS n FROM reading WHERE member=? AND course=? AND done=1',me.id,c.id);
  if(read.n<c.pages)fail('Conclua 100% da leitura antes de continuar.');
  if(b.action==='exam'){
-  if(c.kind!=='curso')fail('A Bíblia Geral não possui prova teórica.');
+  if(c.kind!=='curso')fail(c.kind==='biblia'?'A Bíblia Geral não possui prova teórica.':'Esta apostila não possui prova online: a avaliação é feita in game pelos instrutores.');
   let attempt=await first('SELECT * FROM attempts WHERE member=? AND course=? ORDER BY started DESC LIMIT 1',me.id,c.id);
   if(attempt?.passed)fail('Você já foi aprovado neste curso.');
   if(!attempt||attempt.submitted||now-attempt.started>=900000){

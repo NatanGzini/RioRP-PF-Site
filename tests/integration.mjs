@@ -83,6 +83,16 @@ const retry=ok(await call({action:'exam',course},{cookie:instructor}),'retry').b
 const passed=await call({action:'submit',course,attempt:retry.id,answers:[0]},{cookie:instructor});assert.equal(passed.body.passed,true);assert.equal(passed.body.score,100);
 assert.equal((await call({action:'submit',course,attempt:retry.id,answers:[0]},{cookie:instructor})).status,400);
 
+// Apostila sem prova (avaliação in game): publica sem questões, conta leitura e não abre prova
+const upload2=crypto.randomUUID(),small=new FormData();small.set('action','upload');small.set('upload',upload2);small.set('index','0');small.set('chunk',new Blob([new TextEncoder().encode('%PDF-1.7 apostila')]));ok(await call(small,{cookie:instructor}),'parte apostila');
+ok(await call({action:'course',title:'Apostila QA',kind:'leitura',pages:1,pass:70,questions:'',upload:upload2,parts:1},{cookie:instructor}),'publicar apostila');
+const apostila=(await state(instructor)).courses.find(c=>c.kind==='leitura').id;
+ok(await call({action:'begin',course:apostila,page:1},{cookie:instructor}),'begin apostila');
+await pg.query(`UPDATE reading SET seconds=25,last=$1 WHERE member='200' AND course=$2`,[Date.now()-5000,apostila]);
+assert.equal(ok(await call({action:'pulse',course:apostila,page:1},{cookie:instructor}),'pulse apostila').body.done,1);
+const noExam=await call({action:'exam',course:apostila},{cookie:instructor});assert.equal(noExam.status,400);assert.match(noExam.body.error,/in game/);
+assert.equal((await call({action:'begin',course:apostila,page:1},{cookie:student})).status,403);
+
 // Redefinir a senha encerra a sessão antiga do instrutor; remover o cargo também
 ok(await call({action:'role',id:'200',role:'instrutor',password:'nova-senha-123'},{cookie:admin}),'redefinir senha');
 assert.equal((await state(instructor)).me,null);
