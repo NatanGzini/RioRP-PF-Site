@@ -15,7 +15,7 @@ export type Deps={db:Db;blobs:BlobStore;adminPassword?:string};
 // Requisições de funções Netlify são limitadas a ~6 MB, por isso PDFs sobem em partes de 3 MB.
 export const CHUNK_SIZE=3*1024*1024;
 const MAX_PDF=20*1024*1024,MAX_PARTS=Math.ceil(MAX_PDF/CHUNK_SIZE);
-const STUDENT_SESSION=604800000,STAFF_SESSION=43200000,LOCK_AFTER=5,LOCK_TIME=600000;
+const STUDENT_SESSION=604800000,STAFF_SESSION=43200000,LOCK_AFTER=5,LOCK_TIME=600000,LOCK_WINDOW=900000;
 
 const json=(v:unknown,status=200)=>Response.json(v,{status,headers:{'Cache-Control':'no-store'}});
 const fail=(s:string):never=>{throw new Error(s)};
@@ -77,22 +77,30 @@ export function createHandler({db,blobs,adminPassword}:Deps){
  const b=form?{action:form.get('action')}:await req.json() as any;
  if(b.action==='login'){
   const id=str(b.id,1,30),name=str(b.name,2,100);
-  const member=await first("SELECT id,name FROM members WHERE id=? AND role IN ('aluno','agente')",id);
-  if(!member||normalizeName(member.name)!==normalizeName(name))return json({error:'ID ou nome in-game não conferem com o cadastro. Consulte seu instrutor.'},401);
+  const member=await first("SELECT id,name,role FROM members WHERE lower(id)=lower(?)",id);
+  // Instrutores não entram por aqui; a mensagem explica onde entrar em vez de parecer erro de cadastro.
+  if(member?.role==='instrutor'&&normalizeName(member.name)===normalizeName(name))return json({error:'Este ID é de um instrutor. Use o botão "Acesso de instrutores", logo abaixo, com o seu ID e a sua senha.'},401);
+  if(!member||member.role==='instrutor'||normalizeName(member.name)!==normalizeName(name))return json({error:'ID ou nome in-game não conferem com o cadastro. Consulte seu instrutor.'},401);
   return startSession({id:member.id},STUDENT_SESSION,'Acesso realizado. Bons estudos!');
  }
  if(b.action==='staff-login'){
   const user=str(b.user,1,30),password=secret(b.password,1,'Informe usuário e senha.');
   const lockKey='lock:'+user.toLowerCase(),lockRow=await first('SELECT value FROM settings WHERE key=?',lockKey);
-  const lock=lockRow?JSON.parse(lockRow.value):{n:0,until:0};
-  if(lock.until>now)return json({error:'Muitas tentativas incorretas. Aguarde alguns minutos.'},429);
+  const lock=lockRow?JSON.parse(lockRow.value):{n:0,until:0,last:0};
+  if(lock.until>now)return json({error:`Muitas tentativas incorretas. Aguarde ${Math.ceil((lock.until-now)/60000)} minuto(s) e tente de novo.`},429);
   let session:object|null=null;
-  if(user.toLowerCase()==='admin'){if(adminConfigured&&await sameSecret(password,adminPassword!))session={id:'admin',staff:true,v:await adminVersion()}}
-  else{const m=await first("SELECT id,password FROM members WHERE id=? AND role='instrutor'",user);if(m?.password&&await verifyPassword(password,m.password))session={id:m.id,staff:true,v:m.password.slice(-16)}}
+  if(user.toLowerCase()==='admin'){if(adminConfigured&&(await sameSecret(password,adminPassword!)||await sameSecret(password.trim(),adminPassword!)))session={id:'admin',staff:true,v:await adminVersion()}}
+  else{
+   // ID sem diferenciar maiúsculas; a senha é aceita como digitada ou sem espaços nas pontas (senhas antigas podem ter sido salvas com espaço).
+   const m=await first("SELECT id,password FROM members WHERE lower(id)=lower(?) AND role='instrutor'",user);
+   if(m?.password&&(await verifyPassword(password,m.password)||(password.trim()!==password&&await verifyPassword(password.trim(),m.password))))session={id:m.id,staff:true,v:m.password.slice(-16)};
+  }
   if(!session){
-   const n=(lock.until?0:lock.n)+1;
-   await run('INSERT INTO settings VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',lockKey,JSON.stringify({n,until:n>=LOCK_AFTER?now+LOCK_TIME:0}));
-   return json({error:'Usuário ou senha incorretos.'},401);
+   // O contador zera após um bloqueio ou depois de 15 minutos sem erros, para não acumular tentativas de dias diferentes.
+   const n=(lock.until||now-(lock.last||0)>LOCK_WINDOW?0:lock.n)+1;
+   await run('INSERT INTO settings VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',lockKey,JSON.stringify({n,until:n>=LOCK_AFTER?now+LOCK_TIME:0,last:now}));
+   const left=LOCK_AFTER-n;
+   return json({error:left>0?`Usuário ou senha incorretos. Restam ${left} tentativa(s) antes de um bloqueio de 10 minutos.`:'Usuário ou senha incorretos. Acesso bloqueado por 10 minutos.'},401);
   }
   if(lockRow)await run('DELETE FROM settings WHERE key=?',lockKey);
   return startSession(session,STAFF_SESSION,'Acesso de instrutor liberado.');
@@ -119,7 +127,7 @@ export function createHandler({db,blobs,adminPassword}:Deps){
    const id=str(b.id,1,30),target=await first('SELECT role FROM members WHERE id=?',id);
    if(!target)fail('Matrícula não encontrada.');
    if(target.role==='instrutor'&&!admin)fail('Somente o administrador altera instrutores.');
-   const password=b.role==='instrutor'?await hashPassword(secret(b.password,8,'Defina uma senha com pelo menos 8 caracteres para o instrutor.')):null;
+   const password=b.role==='instrutor'?await hashPassword(secret(typeof b.password==='string'?b.password.trim():b.password,8,'Defina uma senha com pelo menos 8 caracteres para o instrutor.')):null;
    await run('UPDATE members SET role=?,password=? WHERE id=?',b.role,password,id);
    return json({message:b.role==='instrutor'?'Instrutor definido. Ele entra com o ID '+id+' e a senha informada.':'Perfil atualizado.'});
   }

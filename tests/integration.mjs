@@ -34,7 +34,12 @@ assert.equal((await call({action:'role',id:'200',role:'instrutor',password:'curt
 ok(await call({action:'role',id:'200',role:'instrutor',password:'senha-instrutor'},{cookie:admin}),'nomear instrutor');
 
 // Instrutor: entra com senha, nunca pelo formulário de aluno
-assert.equal((await call({action:'login',id:'200',name:'Instrutor QA'})).status,401);
+const wrongForm=await call({action:'login',id:'200',name:'Instrutor QA'});assert.equal(wrongForm.status,401);assert.match(wrongForm.body.error,/Acesso de instrutores/);
+assert.equal(ok(await call({action:'staff-login',user:'200',password:'  senha-instrutor  '}),'senha com espaços').status,200);
+const typo=await call({action:'staff-login',user:'200',password:'errada'});assert.equal(typo.status,401);assert.match(typo.body.error,/Restam 4/);
+await pg.query(`UPDATE settings SET value=$1 WHERE key='lock:200'`,[JSON.stringify({n:4,until:0,last:Date.now()-16*60000})]);
+assert.match((await call({action:'staff-login',user:'200',password:'errada'})).body.error,/Restam 4/);
+ok(await call({action:'staff-login',user:'200',password:'senha-instrutor'}),'login após erros');
 const instructor=ok(await call({action:'staff-login',user:'200',password:'senha-instrutor'}),'login instrutor').cookie;
 const instructorState=await state(instructor);assert.equal(instructorState.me.id,'200');assert.equal(instructorState.admin,false);
 assert.equal((await call({action:'role',id:'100',role:'instrutor',password:'qualquer-senha'},{cookie:instructor})).status,400);

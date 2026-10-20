@@ -26,3 +26,4 @@ nav{gap:25px}nav button{font-size:13px;color:#c5c0b5}.nav-active:after{backgroun
 @media(min-width:761px) and (max-width:960px){header{height:96px}.access{margin-left:auto}.access span{display:inline}.mobile-menu{display:grid;place-items:center}nav{display:none}nav.open{display:flex;position:absolute;top:96px;left:0;right:0;height:auto;align-items:stretch;flex-direction:column;padding:20px;background:#11110d;border-bottom:1px solid #62502d;gap:0}nav button{min-height:46px;text-align:left;padding:10px}.nav-active:after{bottom:5px;left:10px;width:28px}}
 
 .form-heading h2{font-size:18px;line-height:1.5;margin:0;letter-spacing:0}#details-help{margin-top:-8px}
+.instructor-form{border:1px solid #88713c;background:#1b1912;border-radius:6px;padding:20px;margin:10px 0 20px}.instructor-form h3{margin:0 0 8px}.instructor-form h3 small{color:var(--muted);font-weight:400}.instructor-form .modal-actions{margin-top:10px}
