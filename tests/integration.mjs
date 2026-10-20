@@ -7,8 +7,8 @@ import {pgliteDb,memoryBlobs} from '../scripts/local-deps.mjs';
 const base='http://portal.test',ADMIN='senha-admin-de-teste';
 const pg=new PGlite();
 const handle=createHandler({db:pgliteDb(pg),blobs:memoryBlobs(),adminPassword:ADMIN});
-const call=async(body,{cookie,origin=base}={})=>{
- const headers={origin,...(cookie?{cookie}:{})};
+const call=async(body,{cookie,origin=base,ip}={})=>{
+ const headers={origin,...(cookie?{cookie}:{}),...(ip?{'x-forwarded-for':ip}:{})};
  if(!(body instanceof FormData))headers['content-type']='application/json';
  const r=await handle(new Request(base+'/api/portal',{method:'POST',headers,body:body instanceof FormData?body:JSON.stringify(body)}));
  return {status:r.status,body:await r.json(),cookie:r.headers.get('set-cookie')?.split(';')[0]};
@@ -57,6 +57,37 @@ const tampered=student.slice(0,-1)+(student.endsWith('a')?'b':'a');assert.equal(
 const report=ok(await call({action:'report',organization:'Org QA',location:'Ambiente de testes',details:'Relato fictício de teste automatizado, sem envolvidos reais.'}),'denúncia');
 assert.match(report.body.message,/Protocolo/);
 assert.equal((await state(instructor)).reports.length,1);
+
+// Denúncia com anexos: imagem (1 parte) e vídeo (2 partes); só instrutores veem; apagar remove tudo
+const sendPart=(upload,index,bytes,ip='10.0.0.1')=>{const f=new FormData();f.set('action','report-upload');f.set('upload',upload);f.set('index',String(index));f.set('chunk',new Blob([bytes]));return call(f,{ip})};
+assert.equal((await sendPart(crypto.randomUUID(),0,new TextEncoder().encode('<svg>texto qualquer</svg>'))).status,400);
+const png=new Uint8Array(2000);png.set([0x89,0x50,0x4e,0x47,0x0d,0x0a,0x1a,0x0a]);png[1999]=7;
+const mp4=new Uint8Array(CHUNK_SIZE+1000);mp4.set(new TextEncoder().encode('\0\0\0\x18ftypmp42'));mp4[mp4.length-1]=9;
+const imgId=crypto.randomUUID(),vidId=crypto.randomUUID();
+ok(await sendPart(imgId,0,png),'parte imagem');ok(await sendPart(vidId,0,mp4.slice(0,CHUNK_SIZE)),'vídeo parte 1');ok(await sendPart(vidId,1,mp4.slice(CHUNK_SIZE)),'vídeo parte 2');
+const reportBody={organization:'Org Anexos',location:'Ambiente de testes',details:'Relato fictício com anexos de teste, sem envolvidos reais.'};
+const incomplete=crypto.randomUUID();ok(await sendPart(incomplete,0,png),'parte incompleta');
+assert.match((await call({...reportBody,action:'report',attachments:[{upload:incomplete,parts:2,name:'x.png'}]},{ip:'10.0.0.1'})).body.error,/incompleto/);
+assert.match((await call({...reportBody,action:'report',attachments:Array.from({length:5},()=>({upload:crypto.randomUUID(),parts:1}))},{ip:'10.0.0.1'})).body.error,/no máximo 4/);
+ok(await call({...reportBody,action:'report',attachments:[{upload:imgId,parts:1,name:'print<script>.png'},{upload:vidId,parts:2,name:'clipe.mp4'}]},{ip:'10.0.0.1'}),'denúncia com anexos');
+assert.match((await call({...reportBody,action:'report',attachments:[{upload:imgId,parts:1}]},{ip:'10.0.0.1'})).body.error,/já foi enviado/);
+assert.equal((await sendPart(imgId,0,png)).status,400);
+const withFiles=(await state(instructor)).reports.find(r=>r.organization==='Org Anexos');
+const files=JSON.parse(withFiles.attachments);assert.deepEqual(files.map(a=>a.type),['image/png','video/mp4']);assert.equal(files[0].name,'printscript.png');
+const getFile=(n,cookie)=>handle(new Request(base+`/api/portal?action=attachment&report=${withFiles.id}&n=${n}`,{headers:cookie?{cookie}:{}}));
+const vid=await getFile(1,instructor);assert.equal(vid.headers.get('content-type'),'video/mp4');const vidBytes=new Uint8Array(await vid.arrayBuffer());assert.equal(vidBytes.length,mp4.length);assert.equal(vidBytes[vidBytes.length-1],9);
+assert.equal((await getFile(0,instructor)).headers.get('content-type'),'image/png');
+assert.equal((await getFile(0,student)).status,403);assert.equal((await getFile(0)).status,403);
+assert.equal((await call({action:'report-delete',report:withFiles.id},{cookie:student})).status,403);
+ok(await call({action:'report-delete',report:withFiles.id},{cookie:instructor}),'apagar denúncia');
+assert.equal((await state(instructor)).reports.some(r=>r.id===withFiles.id),false);assert.equal((await getFile(0,instructor)).status,404);
+ok(await sendPart(crypto.randomUUID(),0,png),'upload após apagar');
+// Limite anti-spam: 6 denúncias por hora por conexão; outra conexão continua podendo enviar
+for(let i=0;i<4;i++)ok(await call({...reportBody,action:'report'},{ip:'10.0.0.2'}),'denúncia '+i);
+for(let i=0;i<2;i++)await call({...reportBody,action:'report'},{ip:'10.0.0.2'});
+assert.equal((await call({...reportBody,action:'report'},{ip:'10.0.0.2'})).status,429);
+ok(await call({...reportBody,action:'report'},{ip:'10.0.0.3'}),'outra conexão');
+assert.equal((await pg.query(`SELECT COUNT(*)::int AS n FROM settings WHERE key LIKE 'rl:%' AND key LIKE '%10.0.0%'`)).rows[0].n,0);
 
 // Publicação de curso com PDF em várias partes (7 MB → 3 partes)
 const pdf=new Uint8Array(7*1024*1024);pdf.set(new TextEncoder().encode('%PDF-1.7'));pdf[pdf.length-1]=42;

@@ -1,5 +1,5 @@
 // Substitutos locais do Neon e do Netlify Blobs, usados por `npm run dev` e `npm test`.
-import {mkdir,readFile,writeFile,rm} from 'node:fs/promises';
+import {mkdir,readFile,writeFile,rm,stat} from 'node:fs/promises';
 import {join} from 'node:path';
 
 export const pgliteDb=pg=>({query:async(text,params=[])=>(await pg.query(text,params)).rows});
@@ -11,6 +11,7 @@ export function memoryBlobs(){
   buffer:async key=>files.get(key)?.slice(0)??null,
   set:async(key,data)=>{files.set(key,data.slice(0))},
   delete:async key=>{files.delete(key)},
+  exists:async key=>files.has(key),
  };
 }
 
@@ -23,5 +24,6 @@ export async function fileBlobs(dir){
   buffer:read,
   set:async(key,data)=>{await writeFile(path(key),new Uint8Array(data))},
   delete:async key=>{await rm(path(key),{force:true})},
+  exists:async key=>{try{await stat(path(key));return true}catch{return false}},
  };
 }

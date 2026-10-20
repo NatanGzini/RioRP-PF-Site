@@ -9,12 +9,24 @@ export type BlobStore={
  buffer(key:string):Promise<ArrayBuffer|null>;
  set(key:string,data:ArrayBuffer):Promise<void>;
  delete(key:string):Promise<void>;
+ exists(key:string):Promise<boolean>;
 };
 export type Deps={db:Db;blobs:BlobStore;adminPassword?:string};
 
 // Requisições de funções Netlify são limitadas a ~6 MB, por isso PDFs sobem em partes de 3 MB.
 export const CHUNK_SIZE=3*1024*1024;
 const MAX_PDF=20*1024*1024,MAX_PARTS=Math.ceil(MAX_PDF/CHUNK_SIZE);
+// Anexos de denúncia: guardados nas próprias partes (sem remontar, para caber no tempo da função) e entregues em sequência.
+// 5 partes de 3 MB = 15 MB, abaixo do limite de resposta das funções Netlify.
+const MAX_ATTACH=4,ATTACH_PARTS=5;
+// Tipo real do arquivo pelos primeiros bytes; o tipo informado pelo navegador é ignorado.
+function mediaType(b:Uint8Array){
+ const h=(...x:number[])=>x.every((v,i)=>b[i]===v),ascii=(o:number,t:string)=>[...t].every((c,i)=>b[o+i]===c.charCodeAt(0));
+ if(h(0x89,0x50,0x4e,0x47))return 'image/png';if(h(0xff,0xd8,0xff))return 'image/jpeg';if(ascii(0,'GIF8'))return 'image/gif';
+ if(ascii(0,'RIFF')&&ascii(8,'WEBP'))return 'image/webp';if(h(0x1a,0x45,0xdf,0xa3))return 'video/webm';
+ if(ascii(4,'ftyp'))return ascii(8,'qt  ')?'video/quicktime':'video/mp4';
+ return null;
+}
 const STUDENT_SESSION=604800000,STAFF_SESSION=43200000,LOCK_AFTER=5,LOCK_TIME=600000,LOCK_WINDOW=900000;
 
 const json=(v:unknown,status=200)=>Response.json(v,{status,headers:{'Cache-Control':'no-store'}});
@@ -51,6 +63,17 @@ export function createHandler({db,blobs,adminPassword}:Deps){
   else me=await first("SELECT id,name,role FROM members WHERE id=? AND role IN ('aluno','agente')",session.id);
  }}
  const instructor=me?.role==='instrutor';
+ // Limite por conexão e por hora para envios anônimos. Guarda só um código derivado do IP que muda a cada hora,
+ // nunca o IP, e nada é ligado à denúncia: serve apenas para conter spam.
+ const withinLimit=async(kind:string,max:number)=>{
+  const ip=req.headers.get('x-nf-client-connection-ip')||req.headers.get('x-forwarded-for')?.split(',')[0].trim()||'local';
+  const hour=String(Math.floor(now/3600000)),k=`rl:${hour}:${kind}:${(await sha256Hex('rl:'+ip+':'+hour)).slice(0,24)}`;
+  const row=await first('SELECT value FROM settings WHERE key=?',k),n=row?Number(row.value):0;
+  if(n>=max)return false;
+  await run('INSERT INTO settings VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',k,String(n+1));
+  if(!row)await run("DELETE FROM settings WHERE key LIKE 'rl:%' AND key < ?",`rl:${hour}:`);
+  return true;
+ };
  const startSession=async(session:object,age:number,message:string)=>{
   const newToken=crypto.randomUUID()+crypto.randomUUID();
   if(key)await run('DELETE FROM settings WHERE key=?',key);
@@ -74,6 +97,15 @@ export function createHandler({db,blobs,adminPassword}:Deps){
    const attempts=await all('SELECT id,course,started,submitted,score,passed FROM attempts WHERE member=? ORDER BY started DESC',id);
    const events=await all('SELECT attempt,type,at FROM exam_events WHERE member=? ORDER BY at',id);
    return json({member,reading,attempts:attempts.map((a:any)=>({...a,events:events.filter((e:any)=>e.attempt===a.id).map(({type,at}:any)=>({type,at}))}))});
+  }
+  if(url.searchParams.get('action')==='attachment'){
+   if(!instructor)return json({error:'Apenas instrutores.'},403);
+   const r=await first('SELECT attachments FROM reports WHERE id=?',url.searchParams.get('report'));
+   const a=r?.attachments?JSON.parse(r.attachments)[Number(url.searchParams.get('n'))]:null;
+   if(!a)return json({error:'Anexo não encontrado.'},404);
+   let i=0;
+   const body=new ReadableStream({async pull(c){if(i>=a.parts){c.close();return}const part=await blobs.buffer(`report-uploads/${a.upload}/${i++}`);if(part)c.enqueue(new Uint8Array(part));else c.close()}});
+   return new Response(body,{headers:{'Content-Type':a.type,'Cache-Control':'private, max-age=3600','Content-Disposition':`inline; filename="${a.name.replace(/"/g,'')}"`}});
   }
   if(url.searchParams.get('action')==='course'){
    if(!instructor)return json({error:'Apenas instrutores.'},403);
@@ -127,8 +159,34 @@ export function createHandler({db,blobs,adminPassword}:Deps){
   if(key)await run('DELETE FROM settings WHERE key=?',key);
   const response=json({message:'Você saiu da academia.'});response.headers.set('Set-Cookie',cookie(req,'',0));return response;
  }
+ if(b.action==='report-upload'){
+  if(!await withinLimit('upload',80))return json({error:'Muitos envios em pouco tempo. Aguarde alguns minutos e tente de novo.'},429);
+  const upload=String(form?.get('upload')),index=Number(form?.get('index')),chunk=form?.get('chunk');
+  if(!/^[a-f0-9-]{36}$/.test(upload)||!Number.isInteger(index)||index<0||index>=ATTACH_PARTS||!(chunk instanceof Blob)||!chunk.size||chunk.size>CHUNK_SIZE)fail('Parte do anexo inválida. Cada arquivo pode ter até 15 MB.');
+  if(await first('SELECT key FROM settings WHERE key=?','upl:'+upload))fail('Este anexo já foi enviado.');
+  const data=await (chunk as Blob).arrayBuffer();
+  if(index===0&&!mediaType(new Uint8Array(data.slice(0,16))))fail('Formato não aceito. Envie imagens (PNG, JPG, GIF, WebP) ou vídeos (MP4, WebM, MOV).');
+  await blobs.set(`report-uploads/${upload}/${index}`,data);
+  return json({ok:true});
+ }
  if(b.action==='report'){
-  const id=crypto.randomUUID();await run('INSERT INTO reports VALUES (?,?,?,?,?)',id,str(b.organization,2,120),str(b.location,2,200),str(b.details,30,5000),now);
+  if(!await withinLimit('report',6))return json({error:'Muitas denúncias em pouco tempo. Aguarde e tente de novo mais tarde.'},429);
+  const organization=str(b.organization,2,120),location=str(b.location,2,200),details=str(b.details,30,5000);
+  const list=b.attachments===undefined?[]:b.attachments;
+  if(!Array.isArray(list)||list.length>MAX_ATTACH)fail('Envie no máximo 4 arquivos.');
+  const attachments:any[]=[];
+  for(const a of list){
+   const upload=String(a?.upload),parts=Number(a?.parts);
+   if(!/^[a-f0-9-]{36}$/.test(upload)||!Number.isInteger(parts)||parts<1||parts>ATTACH_PARTS||attachments.some(x=>x.upload===upload))fail('Anexo inválido.');
+   if(await first('SELECT key FROM settings WHERE key=?','upl:'+upload))fail('Este anexo já foi enviado.');
+   for(let i=1;i<parts;i++)if(!await blobs.exists(`report-uploads/${upload}/${i}`))fail('O envio de um anexo ficou incompleto. Tente novamente.');
+   const head=await blobs.buffer(`report-uploads/${upload}/0`);if(!head)fail('O envio de um anexo ficou incompleto. Tente novamente.');
+   const type=mediaType(new Uint8Array(head!.slice(0,16)));if(!type)fail('Formato não aceito.');
+   attachments.push({upload,parts,type,name:String(a?.name||'arquivo').replace(/[^\p{L}\p{N} ._()-]/gu,'').slice(0,80)||'arquivo'});
+  }
+  const id=crypto.randomUUID();
+  await run('INSERT INTO reports (id,organization,location,details,created,attachments) VALUES (?,?,?,?,?,?)',id,organization,location,details,now,JSON.stringify(attachments));
+  for(const a of attachments)await run('INSERT INTO settings VALUES (?,?)','upl:'+a.upload,id);
   return json({message:'Denúncia recebida. Protocolo: '+id.slice(0,8).toUpperCase()});
  }
  if(!me)return json({error:'Entre com seu ID e nome in-game para continuar.'},401);
@@ -141,8 +199,14 @@ export function createHandler({db,blobs,adminPassword}:Deps){
   await run('INSERT INTO exam_events VALUES (?,?,?,?,?,?)',crypto.randomUUID(),a.id,me.id,a.course,type,now);
   return json({ok:true});
  }
- if(['member','role','upload','course','settings','course-edit','course-delete','member-remove'].includes(b.action)){
+ if(['member','role','upload','course','settings','course-edit','course-delete','member-remove','report-delete'].includes(b.action)){
   if(!instructor)return json({error:'Apenas instrutores podem realizar esta ação.'},403);
+  if(b.action==='report-delete'){
+   const r=await first('SELECT id,attachments FROM reports WHERE id=?',str(b.report,1,60));if(!r)fail('Denúncia não encontrada.');
+   for(const at of r.attachments?JSON.parse(r.attachments):[]){for(let i=0;i<at.parts;i++)await blobs.delete(`report-uploads/${at.upload}/${i}`);await run('DELETE FROM settings WHERE key=?','upl:'+at.upload)}
+   await run('DELETE FROM reports WHERE id=?',r.id);
+   return json({message:'Denúncia apagada, com os anexos.'});
+  }
   if(b.action==='member'){
    const id=str(b.id,1,30);if(id.toLowerCase()==='admin')fail('Este ID é reservado.');
    await run("INSERT INTO members (id,name,role,created) VALUES (?,?,'aluno',?)",id,str(b.name,2,100),now);

@@ -14,4 +14,6 @@ export const SCHEMA=[
  // Registro de integridade da prova: copiar, recortar, colar e saídas da tela, por tentativa.
  `CREATE TABLE IF NOT EXISTS exam_events(id text PRIMARY KEY,attempt text NOT NULL,member text NOT NULL,course text NOT NULL,type text NOT NULL,at double precision NOT NULL)`,
  `CREATE INDEX IF NOT EXISTS exam_events_attempt ON exam_events(attempt)`,
+ // Anexos das denúncias (lista JSON com as partes guardadas no armazenamento de arquivos).
+ `ALTER TABLE reports ADD COLUMN IF NOT EXISTS attachments text`,
 ];

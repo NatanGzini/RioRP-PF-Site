@@ -19,6 +19,7 @@ export default async function portal(req:Request){
     buffer:key=>store.get(key,{type:'arrayBuffer'}),
     set:async(key,data)=>{await store.set(key,data)},
     delete:key=>store.delete(key),
+    exists:async key=>!!(await store.getMetadata(key)),
    },
    adminPassword:process.env.ADMIN_PASSWORD,
   });
