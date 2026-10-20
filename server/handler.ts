@@ -65,10 +65,28 @@ export function createHandler({db,blobs,adminPassword}:Deps){
    const file=await blobs.stream(c.file);if(!file)return json({error:'PDF não encontrado.'},404);
    return new Response(file,{headers:{'Content-Type':'application/pdf','Cache-Control':'private, no-store','Content-Disposition':'inline'}});
   }
+  // Consultas exclusivas dos instrutores: ficha de um membro e questões de um material (para edição).
+  if(url.searchParams.get('action')==='member'){
+   if(!instructor)return json({error:'Apenas instrutores.'},403);
+   const id=url.searchParams.get('id');
+   const member=await first('SELECT id,name,role,created FROM members WHERE id=?',id);if(!member)return json({error:'Matrícula não encontrada.'},404);
+   const reading=await all('SELECT course,SUM(done)::int AS done,SUM(seconds)::int AS seconds,MAX(last) AS last FROM reading WHERE member=? GROUP BY course',id);
+   const attempts=await all('SELECT id,course,started,submitted,score,passed FROM attempts WHERE member=? ORDER BY started DESC',id);
+   const events=await all('SELECT attempt,type,at FROM exam_events WHERE member=? ORDER BY at',id);
+   return json({member,reading,attempts:attempts.map((a:any)=>({...a,events:events.filter((e:any)=>e.attempt===a.id).map(({type,at}:any)=>({type,at}))}))});
+  }
+  if(url.searchParams.get('action')==='course'){
+   if(!instructor)return json({error:'Apenas instrutores.'},403);
+   const c=await first('SELECT id,title,kind,pages,pass,questions FROM courses WHERE id=?',url.searchParams.get('id'));if(!c)return json({error:'Material não encontrado.'},404);
+   return json(c);
+  }
   const courses=me?await all('SELECT id,title,kind,pages,pass FROM courses'+(!instructor&&me.role==='aluno'?" WHERE kind='biblia'":'')+' ORDER BY title'):[];
   const progress=me?await all('SELECT course,page,seconds,done FROM reading WHERE member=?',me.id):[];
   const exams=me?await all('SELECT id,course,started,submitted,score,passed FROM attempts WHERE member=?',me.id):[];
-  return json({me,admin,configured:adminConfigured,discord:(await first("SELECT value FROM settings WHERE key='discord'"))?.value||'',courses,progress,exams,members:instructor?await all('SELECT id,name,role FROM members ORDER BY created DESC'):[],reports:instructor?await all('SELECT * FROM reports ORDER BY created DESC LIMIT 100'):[]});
+  // Resumo para o painel de membros: páginas lidas por material e situação das provas, com total de alertas.
+  const readingSummary=instructor?await all('SELECT member,course,SUM(done)::int AS done,MAX(last) AS last FROM reading GROUP BY member,course'):[];
+  const examSummary=instructor?await all('SELECT a.member,a.course,COUNT(*)::int AS attempts,MAX(a.score) AS best,MAX(a.passed) AS passed,(SELECT COUNT(*)::int FROM exam_events e WHERE e.member=a.member AND e.course=a.course) AS alerts FROM attempts a GROUP BY a.member,a.course'):[];
+  return json({me,admin,configured:adminConfigured,discord:(await first("SELECT value FROM settings WHERE key='discord'"))?.value||'',courses,progress,exams,members:instructor?await all('SELECT id,name,role,created FROM members ORDER BY created DESC'):[],readingSummary,examSummary,reports:instructor?await all('SELECT * FROM reports ORDER BY created DESC LIMIT 100'):[]});
  }
  if(req.method!=='POST')return json({error:'Método não permitido.'},405);
  if(req.headers.get('origin')!==url.origin)return json({error:'Origem inválida.'},403);
@@ -114,7 +132,16 @@ export function createHandler({db,blobs,adminPassword}:Deps){
   return json({message:'Denúncia recebida. Protocolo: '+id.slice(0,8).toUpperCase()});
  }
  if(!me)return json({error:'Entre com seu ID e nome in-game para continuar.'},401);
- if(['member','role','upload','course','settings'].includes(b.action)){
+ if(b.action==='exam-event'){
+  // Só vale para a tentativa aberta do próprio aluno, dentro do prazo; limite por tentativa evita encher o banco.
+  const type=String(b.type);if(!['copy','cut','paste','hidden','blur'].includes(type))fail('Evento inválido.');
+  const a=await first('SELECT id,course,started,submitted FROM attempts WHERE id=? AND member=?',str(b.attempt,1,60),me.id);
+  if(!a||a.submitted||now-a.started>900000)return json({ok:false});
+  if((await first('SELECT COUNT(*)::int AS n FROM exam_events WHERE attempt=?',a.id)).n>=300)return json({ok:false});
+  await run('INSERT INTO exam_events VALUES (?,?,?,?,?,?)',crypto.randomUUID(),a.id,me.id,a.course,type,now);
+  return json({ok:true});
+ }
+ if(['member','role','upload','course','settings','course-edit','course-delete','member-remove'].includes(b.action)){
   if(!instructor)return json({error:'Apenas instrutores podem realizar esta ação.'},403);
   if(b.action==='member'){
    const id=str(b.id,1,30);if(id.toLowerCase()==='admin')fail('Este ID é reservado.');
@@ -131,6 +158,17 @@ export function createHandler({db,blobs,adminPassword}:Deps){
    await run('UPDATE members SET role=?,password=? WHERE id=?',b.role,password,id);
    return json({message:b.role==='instrutor'?'Instrutor definido. Ele entra com o ID '+id+' e a senha informada.':'Perfil atualizado.'});
   }
+  if(b.action==='member-remove'){
+   const id=str(b.id,1,30),target=await first('SELECT id,name,role FROM members WHERE id=?',id);
+   if(!target)fail('Matrícula não encontrada.');
+   if(id===me.id)fail('Você não pode remover a própria matrícula.');
+   if(target.role==='instrutor'&&!admin)fail('Somente o administrador remove instrutores.');
+   // Apaga histórico e sessões abertas: um ID recadastrado depois começa do zero e não herda o login antigo.
+   for(const sql of ['DELETE FROM exam_events WHERE member=?','DELETE FROM attempts WHERE member=?','DELETE FROM reading WHERE member=?','DELETE FROM members WHERE id=?'])await run(sql,id);
+   await run('DELETE FROM settings WHERE key=?','active:'+id);
+   for(const s of await all("SELECT key,value FROM settings WHERE key LIKE 'session:%'")){let owner;try{owner=JSON.parse(s.value).id}catch{}if(owner===id)await run('DELETE FROM settings WHERE key=?',s.key)}
+   return json({message:`Matrícula de ${target.name} (ID ${id}) removida, com todo o histórico de leitura e provas.`});
+  }
   if(b.action==='settings'){
    const discord=new URL(str(b.discord));if(discord.protocol!=='https:'||!['discord.gg','discord.com'].includes(discord.hostname))fail('Informe um convite HTTPS do Discord.');
    await run("INSERT INTO settings VALUES ('discord',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",discord.href);return json({message:'Discord atualizado.'});
@@ -143,23 +181,42 @@ export function createHandler({db,blobs,adminPassword}:Deps){
    await blobs.set(`uploads/${upload}/${index}`,data);
    return json({ok:true});
   }
-  // action 'course': junta as partes enviadas e publica o material.
-  const title=str(b.title,3,120),kind=b.kind,pages=Number(b.pages),pass=Number(b.pass),parts=Number(b.parts),upload=String(b.upload);
+  if(b.action==='course-delete'){
+   const c=await first('SELECT id,title,file FROM courses WHERE id=?',str(b.course));if(!c)fail('Material não encontrado.');
+   for(const sql of ['DELETE FROM exam_events WHERE course=?','DELETE FROM attempts WHERE course=?','DELETE FROM reading WHERE course=?','DELETE FROM courses WHERE id=?'])await run(sql,c.id);
+   await blobs.delete(c.file);
+   return json({message:`Material "${c.title}" apagado, com o progresso de leitura e as provas dele.`});
+  }
+  // 'course' publica um material novo; 'course-edit' altera um existente (o PDF só é trocado se um novo for enviado).
+  const editing=b.action==='course-edit'?await first('SELECT * FROM courses WHERE id=?',str(b.course)):null;
+  if(b.action==='course-edit'&&!editing)fail('Material não encontrado.');
+  const title=str(b.title,3,120),kind=editing?editing.kind:b.kind,pages=Number(b.pages),pass=Number(b.pass);
   // biblia: formação inicial (alunos) · curso: agentes, com prova online · leitura: apostila de agentes sem prova (avaliação in game)
   if(!['biblia','curso','leitura'].includes(String(kind))||!Number.isInteger(pages)||pages<1||pages>500||!Number.isInteger(pass)||pass<1||pass>100)fail('Revise tipo, páginas e nota mínima.');
-  if(!/^[a-f0-9-]{36}$/.test(upload)||!Number.isInteger(parts)||parts<1||parts>MAX_PARTS)fail('Selecione um PDF de até 20 MB.');
-  if(kind==='biblia'&&await first("SELECT id FROM courses WHERE kind='biblia'"))fail('A Bíblia Geral já está cadastrada.');
+  if(!editing&&kind==='biblia'&&await first("SELECT id FROM courses WHERE kind='biblia'"))fail('A Bíblia Geral já está cadastrada.');
   let questions:any;try{questions=kind==='curso'?JSON.parse(String(b.questions||'[]')):[]}catch{fail('O JSON das questões é inválido.')}
   if(!Array.isArray(questions)||questions.length>50||(kind==='curso'&&!questions.length))fail('Cadastre entre 1 e 50 questões para o curso.');
   for(const q of questions)if(typeof q?.text!=='string'||q.text.length<5||!Array.isArray(q.options)||q.options.length!==4||q.options.some((o:any)=>typeof o!=='string'||!o.trim())||!Number.isInteger(q.answer)||q.answer<0||q.answer>3)fail('Cada questão precisa de texto, quatro opções e resposta entre 0 e 3.');
-  const chunks:ArrayBuffer[]=[];
-  for(let i=0;i<parts;i++){const part=await blobs.buffer(`uploads/${upload}/${i}`);if(!part)fail('O envio do PDF ficou incompleto. Tente novamente.');chunks.push(part!)}
-  const size=chunks.reduce((s,c)=>s+c.byteLength,0);if(size<5||size>MAX_PDF)fail('Selecione um PDF de até 20 MB.');
-  const pdf=new Uint8Array(size);let offset=0;for(const c of chunks){pdf.set(new Uint8Array(c),offset);offset+=c.byteLength}
-  if(new TextDecoder().decode(pdf.slice(0,5))!=='%PDF-')fail('Arquivo PDF inválido.');
-  const id=crypto.randomUUID(),file='courses/'+id+'.pdf';
-  await blobs.set(file,pdf.buffer);
-  for(let i=0;i<parts;i++)await blobs.delete(`uploads/${upload}/${i}`);
+  const hasUpload=b.upload!==undefined&&b.upload!==null&&b.upload!=='';
+  if(!editing&&!hasUpload)fail('Selecione um PDF de até 20 MB.');
+  const id=editing?editing.id:crypto.randomUUID(),file=editing?editing.file:'courses/'+id+'.pdf';
+  if(hasUpload){
+   const parts=Number(b.parts),upload=String(b.upload);
+   if(!/^[a-f0-9-]{36}$/.test(upload)||!Number.isInteger(parts)||parts<1||parts>MAX_PARTS)fail('Selecione um PDF de até 20 MB.');
+   const chunks:ArrayBuffer[]=[];
+   for(let i=0;i<parts;i++){const part=await blobs.buffer(`uploads/${upload}/${i}`);if(!part)fail('O envio do PDF ficou incompleto. Tente novamente.');chunks.push(part!)}
+   const size=chunks.reduce((s,c)=>s+c.byteLength,0);if(size<5||size>MAX_PDF)fail('Selecione um PDF de até 20 MB.');
+   const pdf=new Uint8Array(size);let offset=0;for(const c of chunks){pdf.set(new Uint8Array(c),offset);offset+=c.byteLength}
+   if(new TextDecoder().decode(pdf.slice(0,5))!=='%PDF-')fail('Arquivo PDF inválido.');
+   await blobs.set(file,pdf.buffer);
+   for(let i=0;i<parts;i++)await blobs.delete(`uploads/${upload}/${i}`);
+  }
+  if(editing){
+   await run('UPDATE courses SET title=?,pages=?,questions=?,pass=? WHERE id=?',title,pages,JSON.stringify(questions),pass,id);
+   // Páginas que deixaram de existir saem do progresso, para a leitura não passar de 100%.
+   if(pages<editing.pages)await run('DELETE FROM reading WHERE course=? AND page>?',id,pages);
+   return json({message:'Material atualizado.'});
+  }
   await run('INSERT INTO courses VALUES (?,?,?,?,?,?,?)',id,title,kind,pages,file,JSON.stringify(questions),pass);
   return json({message:'Material publicado na academia.'});
  }

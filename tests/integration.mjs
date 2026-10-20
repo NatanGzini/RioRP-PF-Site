@@ -98,6 +98,52 @@ assert.equal(ok(await call({action:'pulse',course:apostila,page:1},{cookie:instr
 const noExam=await call({action:'exam',course:apostila},{cookie:instructor});assert.equal(noExam.status,400);assert.match(noExam.body.error,/in game/);
 assert.equal((await call({action:'begin',course:apostila,page:1},{cookie:student})).status,403);
 
+// Painel de membros: registro de copiar/colar e saídas da tela durante a prova
+ok(await call({action:'member',id:'300',name:'Agente QA'},{cookie:admin}),'cadastro agente');
+ok(await call({action:'role',id:'300',role:'agente'},{cookie:instructor}),'promover agente');
+const agent=ok(await call({action:'login',id:'300',name:'Agente QA'}),'login agente').cookie;
+ok(await call({action:'begin',course,page:1},{cookie:agent}),'begin agente');
+await pg.query(`UPDATE reading SET seconds=30,done=1 WHERE member='300'`);
+const agentExam=ok(await call({action:'exam',course},{cookie:agent}),'prova agente').body;
+for(const type of ['copy','paste','hidden'])assert.equal(ok(await call({action:'exam-event',attempt:agentExam.id,type},{cookie:agent}),'evento '+type).body.ok,true);
+assert.equal((await call({action:'exam-event',attempt:agentExam.id,type:'hack'},{cookie:agent})).status,400);
+assert.equal((await call({action:'exam-event',attempt:agentExam.id,type:'copy'},{cookie:student})).body.ok,false);
+ok(await call({action:'submit',course,attempt:agentExam.id,answers:[1]},{cookie:agent}),'submit agente');
+assert.equal((await call({action:'exam-event',attempt:agentExam.id,type:'paste'},{cookie:agent})).body.ok,false);
+const getJson=async(path,cookie)=>{const r=await handle(new Request(base+path,{headers:cookie?{cookie}:{}}));return {status:r.status,body:await r.json()}};
+const fichaAgente=await getJson('/api/portal?action=member&id=300',instructor);
+assert.equal(fichaAgente.status,200);assert.deepEqual(fichaAgente.body.attempts[0].events.map(e=>e.type),['copy','paste','hidden']);
+assert.equal(fichaAgente.body.reading.find(r=>r.course===course).done,1);
+assert.equal((await state(instructor)).examSummary.find(e=>e.member==='300').alerts,3);
+assert.equal((await getJson('/api/portal?action=member&id=300',agent)).status,403);
+assert.equal((await getJson('/api/portal?action=course&id='+course,student)).status,403);
+assert.equal(JSON.parse((await getJson('/api/portal?action=course&id='+course,instructor)).body.questions)[0].answer,0);
+assert.equal((await state(agent)).readingSummary.length,0);
+
+// Editar material: título e páginas; páginas removidas saem do progresso; PDF é opcional
+ok(await call({action:'course-edit',course,title:'Curso QA editado',pages:2,pass:60,questions},{cookie:instructor}),'editar curso');
+let edited=(await state(instructor)).courses.find(c=>c.id===course);assert.equal(edited.title,'Curso QA editado');assert.equal(edited.pages,2);assert.equal(edited.pass,60);
+await pg.query(`INSERT INTO reading VALUES ('300:${course}:2','300',$1,2,0,0,30,1)`,[course]);
+ok(await call({action:'course-edit',course,title:'Curso QA editado',pages:1,pass:60,questions},{cookie:instructor}),'reduzir páginas');
+assert.equal((await pg.query(`SELECT COUNT(*)::int AS n FROM reading WHERE course=$1 AND page>1`,[course])).rows[0].n,0);
+assert.equal((await call({action:'course-edit',course,title:'X',pages:1,pass:60,questions},{cookie:agent})).status,403);
+assert.equal((await call({action:'course-edit',course:'nao-existe',title:'Teste',pages:1,pass:60},{cookie:instructor})).status,400);
+
+// Remover matrícula: apaga histórico e sessão; ID recadastrado começa do zero
+assert.match((await call({action:'member-remove',id:'200'},{cookie:instructor})).body.error,/própria matrícula/);
+assert.equal((await call({action:'member-remove',id:'300'},{cookie:agent})).status,403);
+ok(await call({action:'member-remove',id:'300'},{cookie:instructor}),'remover agente');
+assert.equal((await state(agent)).me,null);
+ok(await call({action:'member',id:'300',name:'Agente QA'},{cookie:admin}),'recadastro');
+assert.equal((await state(agent)).me,null);
+const fresh=await getJson('/api/portal?action=member&id=300',instructor);assert.equal(fresh.body.attempts.length,0);assert.equal(fresh.body.reading.length,0);
+
+// Apagar material: some da lista, leituras e PDF também
+ok(await call({action:'course-delete',course:apostila},{cookie:instructor}),'apagar apostila');
+assert.equal((await state(instructor)).courses.some(c=>c.id===apostila),false);
+assert.equal((await pg.query(`SELECT COUNT(*)::int AS n FROM reading WHERE course=$1`,[apostila])).rows[0].n,0);
+assert.equal((await handle(new Request(base+'/api/portal?action=pdf&course='+apostila,{headers:{cookie:instructor}}))).status,403);
+
 // Redefinir a senha encerra a sessão antiga do instrutor; remover o cargo também
 ok(await call({action:'role',id:'200',role:'instrutor',password:'nova-senha-123'},{cookie:admin}),'redefinir senha');
 assert.equal((await state(instructor)).me,null);

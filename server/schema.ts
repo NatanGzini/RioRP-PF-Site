@@ -11,4 +11,7 @@ export const SCHEMA=[
  `CREATE TABLE IF NOT EXISTS settings(key text PRIMARY KEY,value text NOT NULL)`,
  `CREATE INDEX IF NOT EXISTS reading_member ON reading(member,course)`,
  `CREATE INDEX IF NOT EXISTS attempts_member ON attempts(member,course)`,
+ // Registro de integridade da prova: copiar, recortar, colar e saídas da tela, por tentativa.
+ `CREATE TABLE IF NOT EXISTS exam_events(id text PRIMARY KEY,attempt text NOT NULL,member text NOT NULL,course text NOT NULL,type text NOT NULL,at double precision NOT NULL)`,
+ `CREATE INDEX IF NOT EXISTS exam_events_attempt ON exam_events(attempt)`,
 ];
