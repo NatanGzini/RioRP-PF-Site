@@ -1,0 +1,64 @@
+// Abertura do site: cortes rápidos de tipografia (estilo "match cut") que terminam no emblema da PF.
+// Roda uma vez por sessão, tem botão "Pular" e não roda com "reduzir movimento" ativado.
+import {useEffect,useState} from 'react';
+
+type Frame={word:string;sub?:string;bg:'dark'|'gold'|'paper';size:number;x:number;y:number;rotate?:number;ms:number};
+
+// size em vw; x/y = posição do centro da palavra em % da tela (valores fora de 0–100 cortam a palavra na borda).
+const FRAMES:Frame[]=[
+ {word:'POLÍCIA',bg:'paper',size:30,x:38,y:18,ms:300},
+ {word:'FEDERAL',bg:'dark',size:26,x:58,y:82,ms:260},
+ {word:'Inteligência',bg:'gold',size:15,x:50,y:50,rotate:-4,ms:230},
+ {word:'LEALDADE',bg:'paper',size:22,x:30,y:70,ms:200},
+ {word:'JUSTIÇA',bg:'dark',size:34,x:64,y:28,ms:180},
+ {word:'RIO RP',sub:'SUPERINTENDÊNCIA',bg:'gold',size:24,x:50,y:52,ms:160},
+ {word:'COT',bg:'dark',size:48,x:70,y:60,ms:140},
+ {word:'Operações',bg:'paper',size:20,x:42,y:40,rotate:3,ms:120},
+ {word:'DISTINTIVO',bg:'dark',size:20,x:50,y:84,ms:100},
+ {word:'POLÍCIA',bg:'gold',size:40,x:22,y:46,ms:85},
+ {word:'FEDERAL',bg:'paper',size:40,x:80,y:56,ms:75},
+ {word:'PF',bg:'dark',size:70,x:50,y:50,ms:70},
+];
+const LOGO_MS=1500,FADE_MS=600,KEY='pf-intro-vista';
+
+function shouldPlay(){
+ try{if(sessionStorage.getItem(KEY))return false}catch{}
+ return !window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+}
+
+export default function Intro(){
+ const [show,setShow]=useState(shouldPlay),[step,setStep]=useState(0),[leaving,setLeaving]=useState(false);
+ const finish=()=>{try{sessionStorage.setItem(KEY,'1')}catch{}setLeaving(true);setTimeout(()=>setShow(false),FADE_MS)};
+ useEffect(()=>{
+  if(!show)return;
+  new Image().src='/brand/emblema-pf.png'; // garante o emblema pronto para o quadro final
+  const overflow=document.body.style.overflow;document.body.style.overflow='hidden';
+  return()=>{document.body.style.overflow=overflow};
+ },[show]);
+ useEffect(()=>{
+  if(!show||leaving)return;
+  // step 0..FRAMES.length-1 = cortes; FRAMES.length = emblema.
+  const t=step<FRAMES.length?setTimeout(()=>setStep(step+1),FRAMES[step].ms):setTimeout(finish,LOGO_MS);
+  return()=>clearTimeout(t);
+ },[step,show,leaving]);
+ useEffect(()=>{
+  if(!show)return;const key=(e:KeyboardEvent)=>{if(e.key==='Escape'||e.key==='Enter'||e.key===' ')finish()};
+  window.addEventListener('keydown',key);return()=>window.removeEventListener('keydown',key);
+ },[show]);
+ if(!show)return null;
+ const f=FRAMES[step];
+ return <div className={'intro'+(leaving?' intro-out':'')} role="presentation">
+  {f?<div key={step} className={'intro-frame intro-'+f.bg}>
+   <span className="intro-word" style={{fontSize:f.size+'vw',left:f.x+'%',top:f.y+'%',['--r' as any]:(f.rotate||0)+'deg'}}>{f.word}</span>
+   {f.sub&&<span className="intro-sub">{f.sub}</span>}
+   <span className="intro-grain"/>
+  </div>:<div className="intro-frame intro-dark intro-logo">
+   <img src="/brand/emblema-pf.png" alt="" width="451" height="566"/>
+   <div className="intro-title">POLÍCIA FEDERAL</div>
+   <div className="intro-line"/>
+   <div className="intro-tagline">SUPERINTENDÊNCIA · RIO RP</div>
+   <span className="intro-grain"/>
+  </div>}
+  <button className="intro-skip" onClick={finish}>Pular</button>
+ </div>;
+}
