@@ -30,9 +30,14 @@ function mediaType(b:Uint8Array){
 // Destaque da página inicial: notícia editável pelos instrutores. Este é o conteúdo usado até a primeira edição.
 export const DEFAULT_HIGHLIGHT={active:true,tag:'Operação Traíra',title:'PF prende Andrex',text:'Em ação coordenada da Polícia Federal de RIO RP, a Operação Traíra cumpriu mandado de prisão contra Andrex. A investigação segue em andamento. Informações sobre o caso podem ser enviadas pelo canal de denúncia anônima.',date:'',stamp:'PRESO'};
 const STUDENT_SESSION=604800000,STAFF_SESSION=43200000,LOCK_AFTER=5,LOCK_TIME=600000,LOCK_WINDOW=900000;
+// Limites por conexão e por hora (anti-força bruta e anti-spam) e espera entre tentativas de prova reprovadas.
+const LIMITS={login:30,staff:20,report:6,upload:45},EXAM_COOLDOWN=600000,HOUSEKEEPING_EVERY=3600000,ORPHAN_AGE=86400000;
 
-const json=(v:unknown,status=200)=>Response.json(v,{status,headers:{'Cache-Control':'no-store'}});
-const fail=(s:string):never=>{throw new Error(s)};
+// Só mensagens criadas com fail() chegam ao usuário; qualquer outro erro vira uma mensagem genérica (sem detalhes internos).
+class UserError extends Error{}
+const base={'Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Vary':'Cookie'};
+const json=(v:unknown,status=200)=>Response.json(v,{status,headers:base});
+const fail=(s:string):never=>{throw new UserError(s)};
 const str=(v:unknown,min=1,max=200)=>typeof v==='string'&&v.trim().length>=min&&v.length<=max?v.trim():fail('Preencha os campos corretamente.');
 const secret=(v:unknown,min:number,message:string)=>typeof v==='string'&&v.length>=min&&v.length<=200?v:fail(message);
 const normalizeName=(s:string)=>s.normalize('NFKC').trim().replace(/\s+/g,' ').toLocaleLowerCase('pt-BR');
@@ -51,6 +56,24 @@ export function createHandler({db,blobs,adminPassword}:Deps){
  let ready:Promise<void>|undefined;
  const migrate=async()=>{for(const s of SCHEMA)await db.query(s)};
  const ensureSchema=()=>ready??=migrate().catch(()=>migrate()).catch(e=>{ready=undefined;throw e});
+ // Segredo usado para embaralhar os códigos de IP: a senha do admin quando existe, senão um valor aleatório da instância.
+ const pepper=adminPassword||crypto.randomUUID();
+ // Hash de uma senha qualquer, usado quando o instrutor não existe: a resposta demora o mesmo e não revela quais IDs existem.
+ let dummyHash:Promise<string>|undefined;
+ const dummy=()=>dummyHash??=hashPassword(crypto.randomUUID());
+ // Faxina periódica (no máximo 1x por hora por instância): anexos abandonados, sessões vencidas e bloqueios antigos.
+ let lastHousekeeping=0;
+ const housekeeping=async()=>{
+  const now=Date.now();if(now-lastHousekeeping<HOUSEKEEPING_EVERY)return;lastHousekeeping=now;
+  try{
+   for(const r of await all("SELECT key,value FROM settings WHERE key LIKE 'pend:%' OR key LIKE 'session:%' OR key LIKE 'lock:%'")){
+    let v:any;try{v=JSON.parse(r.value)}catch{v=Number(r.value)}
+    if(r.key.startsWith('pend:')&&now-Number(v)>ORPHAN_AGE){const upload=r.key.slice(5);for(let i=0;i<ATTACH_PARTS;i++)await blobs.delete(`report-uploads/${upload}/${i}`);await run('DELETE FROM settings WHERE key=?',r.key)}
+    else if(r.key.startsWith('session:')&&v?.expires<=now)await run('DELETE FROM settings WHERE key=?',r.key);
+    else if(r.key.startsWith('lock:')&&now-(v?.last||0)>ORPHAN_AGE)await run('DELETE FROM settings WHERE key=?',r.key);
+   }
+  }catch(e){console.error(e)}
+ };
 
  return async function handle(req:Request):Promise<Response>{try{
  await ensureSchema();
@@ -66,11 +89,12 @@ export function createHandler({db,blobs,adminPassword}:Deps){
  }}
  const instructor=me?.role==='instrutor';
  const readHighlight=async()=>{const row=await first("SELECT value FROM settings WHERE key='highlight'");try{return row?JSON.parse(row.value):DEFAULT_HIGHLIGHT}catch{return DEFAULT_HIGHLIGHT}};
- // Limite por conexão e por hora para envios anônimos. Guarda só um código derivado do IP que muda a cada hora,
- // nunca o IP, e nada é ligado à denúncia: serve apenas para conter spam.
+ // Limite por conexão e por hora. Guarda só um código derivado do IP, misturado a um segredo do servidor
+ // (não dá para descobrir o IP a partir do banco) e trocado a cada hora; nada é ligado à denúncia.
+ const ip=req.headers.get('x-nf-client-connection-ip')||req.headers.get('x-forwarded-for')?.split(',')[0].trim()||'local';
+ const ipTag=async(scope:string)=>(await sha256Hex(`${scope}:${pepper}:${ip}`)).slice(0,24);
  const withinLimit=async(kind:string,max:number)=>{
-  const ip=req.headers.get('x-nf-client-connection-ip')||req.headers.get('x-forwarded-for')?.split(',')[0].trim()||'local';
-  const hour=String(Math.floor(now/3600000)),k=`rl:${hour}:${kind}:${(await sha256Hex('rl:'+ip+':'+hour)).slice(0,24)}`;
+  const hour=String(Math.floor(now/3600000)),k=`rl:${hour}:${kind}:${await ipTag('rl:'+hour)}`;
   const row=await first('SELECT value FROM settings WHERE key=?',k),n=row?Number(row.value):0;
   if(n>=max)return false;
   await run('INSERT INTO settings VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',k,String(n+1));
@@ -89,7 +113,7 @@ export function createHandler({db,blobs,adminPassword}:Deps){
    const c=await first('SELECT * FROM courses WHERE id=?',url.searchParams.get('course'));
    if(!c||(!instructor&&me.role==='aluno'&&c.kind!=='biblia'))return json({error:'Sem acesso.'},403);
    const file=await blobs.stream(c.file);if(!file)return json({error:'PDF não encontrado.'},404);
-   return new Response(file,{headers:{'Content-Type':'application/pdf','Cache-Control':'private, no-store','Content-Disposition':'inline'}});
+   return new Response(file,{headers:{...base,'Content-Type':'application/pdf','Cache-Control':'private, no-store','Content-Disposition':'inline','X-Frame-Options':'SAMEORIGIN'}});
   }
   // Consultas exclusivas dos instrutores: ficha de um membro e questões de um material (para edição).
   if(url.searchParams.get('action')==='member'){
@@ -108,7 +132,8 @@ export function createHandler({db,blobs,adminPassword}:Deps){
    if(!a)return json({error:'Anexo não encontrado.'},404);
    let i=0;
    const body=new ReadableStream({async pull(c){if(i>=a.parts){c.close();return}const part=await blobs.buffer(`report-uploads/${a.upload}/${i++}`);if(part)c.enqueue(new Uint8Array(part));else c.close()}});
-   return new Response(body,{headers:{'Content-Type':a.type,'Cache-Control':'private, max-age=3600','Content-Disposition':`inline; filename="${a.name.replace(/"/g,'')}"`}});
+   // sandbox: mesmo que alguém abra o anexo direto no navegador, nada nele pode rodar como parte do site.
+   return new Response(body,{headers:{...base,'Content-Type':a.type,'Cache-Control':'private, max-age=3600','Content-Disposition':`inline; filename="${a.name.replace(/"/g,'')}"`,'Content-Security-Policy':"default-src 'none'; img-src 'self'; media-src 'self'; style-src 'unsafe-inline'; sandbox"}});
   }
   if(url.searchParams.get('action')==='course'){
    if(!instructor)return json({error:'Apenas instrutores.'},403);
@@ -126,9 +151,13 @@ export function createHandler({db,blobs,adminPassword}:Deps){
  if(req.method!=='POST')return json({error:'Método não permitido.'},405);
  if(req.headers.get('origin')!==url.origin)return json({error:'Origem inválida.'},403);
  if(Number(req.headers.get('content-length')||0)>CHUNK_SIZE+1000000)return json({error:'Envio muito grande.'},413);
- const form=req.headers.get('content-type')?.includes('multipart/form-data')?await req.formData():null;
- const b=form?{action:form.get('action')}:await req.json() as any;
+ let form:FormData|null=null,b:any;
+ try{form=req.headers.get('content-type')?.includes('multipart/form-data')?await req.formData():null;b=form?{action:form.get('action')}:await req.json()}
+ catch{return json({error:'Requisição inválida.'},400)}
+ if(!b||typeof b!=='object'||Array.isArray(b)||typeof b.action!=='string')return json({error:'Requisição inválida.'},400);
+ await housekeeping();
  if(b.action==='login'){
+  if(!await withinLimit('login',LIMITS.login))return json({error:'Muitas tentativas de acesso. Aguarde um pouco e tente de novo.'},429);
   const id=str(b.id,1,30),name=str(b.name,2,100);
   const member=await first("SELECT id,name,role FROM members WHERE lower(id)=lower(?)",id);
   // Instrutores não entram por aqui; a mensagem explica onde entrar em vez de parecer erro de cadastro.
@@ -138,7 +167,9 @@ export function createHandler({db,blobs,adminPassword}:Deps){
  }
  if(b.action==='staff-login'){
   const user=str(b.user,1,30),password=secret(b.password,1,'Informe usuário e senha.');
-  const lockKey='lock:'+user.toLowerCase(),lockRow=await first('SELECT value FROM settings WHERE key=?',lockKey);
+  if(!await withinLimit('staff',LIMITS.staff))return json({error:'Muitas tentativas de acesso. Aguarde um pouco e tente de novo.'},429);
+  // O bloqueio vale para o par usuário + conexão: quem erra a senha bloqueia só a si mesmo, não o instrutor verdadeiro.
+  const lockKey=`lock:${user.toLowerCase()}:${await ipTag('lock')}`,lockRow=await first('SELECT value FROM settings WHERE key=?',lockKey);
   const lock=lockRow?JSON.parse(lockRow.value):{n:0,until:0,last:0};
   if(lock.until>now)return json({error:`Muitas tentativas incorretas. Aguarde ${Math.ceil((lock.until-now)/60000)} minuto(s) e tente de novo.`},429);
   let session:object|null=null;
@@ -147,6 +178,7 @@ export function createHandler({db,blobs,adminPassword}:Deps){
    // ID sem diferenciar maiúsculas; a senha é aceita como digitada ou sem espaços nas pontas (senhas antigas podem ter sido salvas com espaço).
    const m=await first("SELECT id,password FROM members WHERE lower(id)=lower(?) AND role='instrutor'",user);
    if(m?.password&&(await verifyPassword(password,m.password)||(password.trim()!==password&&await verifyPassword(password.trim(),m.password))))session={id:m.id,staff:true,v:m.password.slice(-16)};
+   else if(!m?.password)await verifyPassword(password,await dummy());
   }
   if(!session){
    // O contador zera após um bloqueio ou depois de 15 minutos sem erros, para não acumular tentativas de dias diferentes.
@@ -163,17 +195,20 @@ export function createHandler({db,blobs,adminPassword}:Deps){
   const response=json({message:'Você saiu da academia.'});response.headers.set('Set-Cookie',cookie(req,'',0));return response;
  }
  if(b.action==='report-upload'){
-  if(!await withinLimit('upload',80))return json({error:'Muitos envios em pouco tempo. Aguarde alguns minutos e tente de novo.'},429);
+  if(!await withinLimit('upload',LIMITS.upload))return json({error:'Muitos envios em pouco tempo. Aguarde alguns minutos e tente de novo.'},429);
   const upload=String(form?.get('upload')),index=Number(form?.get('index')),chunk=form?.get('chunk');
   if(!/^[a-f0-9-]{36}$/.test(upload)||!Number.isInteger(index)||index<0||index>=ATTACH_PARTS||!(chunk instanceof Blob)||!chunk.size||chunk.size>CHUNK_SIZE)fail('Parte do anexo inválida. Cada arquivo pode ter até 15 MB.');
   if(await first('SELECT key FROM settings WHERE key=?','upl:'+upload))fail('Este anexo já foi enviado.');
   const data=await (chunk as Blob).arrayBuffer();
   if(index===0&&!mediaType(new Uint8Array(data.slice(0,16))))fail('Formato não aceito. Envie imagens (PNG, JPG, GIF, WebP) ou vídeos (MP4, WebM, MOV).');
+  // Partes só em ordem a partir da 0, que registra o envio como pendente; pendentes sem denúncia são apagados em 24 h.
+  if(index===0)await run("INSERT INTO settings VALUES (?,?) ON CONFLICT(key) DO NOTHING",'pend:'+upload,String(now));
+  else if(!await first('SELECT key FROM settings WHERE key=?','pend:'+upload))fail('Envie o arquivo desde o começo.');
   await blobs.set(`report-uploads/${upload}/${index}`,data);
   return json({ok:true});
  }
  if(b.action==='report'){
-  if(!await withinLimit('report',6))return json({error:'Muitas denúncias em pouco tempo. Aguarde e tente de novo mais tarde.'},429);
+  if(!await withinLimit('report',LIMITS.report))return json({error:'Muitas denúncias em pouco tempo. Aguarde e tente de novo mais tarde.'},429);
   const organization=str(b.organization,2,120),location=str(b.location,2,200),details=str(b.details,30,5000);
   const list=b.attachments===undefined?[]:b.attachments;
   if(!Array.isArray(list)||list.length>MAX_ATTACH)fail('Envie no máximo 4 arquivos.');
@@ -189,7 +224,7 @@ export function createHandler({db,blobs,adminPassword}:Deps){
   }
   const id=crypto.randomUUID();
   await run('INSERT INTO reports (id,organization,location,details,created,attachments) VALUES (?,?,?,?,?,?)',id,organization,location,details,now,JSON.stringify(attachments));
-  for(const a of attachments)await run('INSERT INTO settings VALUES (?,?)','upl:'+a.upload,id);
+  for(const a of attachments){await run('INSERT INTO settings VALUES (?,?)','upl:'+a.upload,id);await run('DELETE FROM settings WHERE key=?','pend:'+a.upload)}
   return json({message:'Denúncia recebida. Protocolo: '+id.slice(0,8).toUpperCase()});
  }
  if(!me)return json({error:'Entre com seu ID e nome in-game para continuar.'},401);
@@ -212,6 +247,7 @@ export function createHandler({db,blobs,adminPassword}:Deps){
   }
   if(b.action==='member'){
    const id=str(b.id,1,30);if(id.toLowerCase()==='admin')fail('Este ID é reservado.');
+   if(await first('SELECT id FROM members WHERE lower(id)=lower(?)',id))fail('Este ID já está cadastrado.');
    await run("INSERT INTO members (id,name,role,created) VALUES (?,?,'aluno',?)",id,str(b.name,2,100),now);
    return json({message:'Aluno cadastrado. Ele já pode entrar com o ID e o nome in-game informados.'});
   }
@@ -243,7 +279,7 @@ export function createHandler({db,blobs,adminPassword}:Deps){
    return json({message:value.active?'Destaque atualizado na página inicial.':'Destaque salvo e escondido da página inicial.'});
   }
   if(b.action==='settings'){
-   const discord=new URL(str(b.discord));if(discord.protocol!=='https:'||!['discord.gg','discord.com'].includes(discord.hostname))fail('Informe um convite HTTPS do Discord.');
+   let discord:URL;try{discord=new URL(str(b.discord))}catch{fail('Informe um convite HTTPS do Discord.')}discord=discord!;if(discord.protocol!=='https:'||!['discord.gg','discord.com'].includes(discord.hostname))fail('Informe um convite HTTPS do Discord.');
    await run("INSERT INTO settings VALUES ('discord',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",discord.href);return json({message:'Discord atualizado.'});
   }
   if(b.action==='upload'){
@@ -269,7 +305,7 @@ export function createHandler({db,blobs,adminPassword}:Deps){
   if(!editing&&kind==='biblia'&&await first("SELECT id FROM courses WHERE kind='biblia'"))fail('A Bíblia Geral já está cadastrada.');
   let questions:any;try{questions=kind==='curso'?JSON.parse(String(b.questions||'[]')):[]}catch{fail('O JSON das questões é inválido.')}
   if(!Array.isArray(questions)||questions.length>50||(kind==='curso'&&!questions.length))fail('Cadastre entre 1 e 50 questões para o curso.');
-  for(const q of questions)if(typeof q?.text!=='string'||q.text.length<5||!Array.isArray(q.options)||q.options.length!==4||q.options.some((o:any)=>typeof o!=='string'||!o.trim())||!Number.isInteger(q.answer)||q.answer<0||q.answer>3)fail('Cada questão precisa de texto, quatro opções e resposta entre 0 e 3.');
+  for(const q of questions)if(typeof q?.text!=='string'||q.text.length<5||q.text.length>500||!Array.isArray(q.options)||q.options.length!==4||q.options.some((o:any)=>typeof o!=='string'||!o.trim()||o.length>200)||!Number.isInteger(q.answer)||q.answer<0||q.answer>3)fail('Cada questão precisa de texto (até 500 caracteres), quatro opções (até 200 cada) e resposta entre 0 e 3.');
   const hasUpload=b.upload!==undefined&&b.upload!==null&&b.upload!=='';
   if(!editing&&!hasUpload)fail('Selecione um PDF de até 20 MB.');
   const id=editing?editing.id:crypto.randomUUID(),file=editing?editing.file:'courses/'+id+'.pdf';
@@ -314,6 +350,8 @@ export function createHandler({db,blobs,adminPassword}:Deps){
   if(c.kind!=='curso')fail(c.kind==='biblia'?'A Bíblia Geral não possui prova teórica.':'Esta apostila não possui prova online: a avaliação é feita in game pelos instrutores.');
   let attempt=await first('SELECT * FROM attempts WHERE member=? AND course=? ORDER BY started DESC LIMIT 1',me.id,c.id);
   if(attempt?.passed)fail('Você já foi aprovado neste curso.');
+  // Espera entre tentativas reprovadas: impede descobrir o gabarito repetindo a prova sem parar.
+  if(attempt?.submitted&&now-attempt.submitted<EXAM_COOLDOWN)fail(`Aguarde ${Math.ceil((EXAM_COOLDOWN-(now-attempt.submitted))/60000)} minuto(s) para tentar a prova de novo. Aproveite para revisar a apostila.`);
   if(!attempt||attempt.submitted||now-attempt.started>=900000){
    if(attempt&&!attempt.submitted)await run('UPDATE attempts SET submitted=?,score=0 WHERE id=?',now,attempt.id);
    attempt={id:crypto.randomUUID(),started:now};
@@ -333,8 +371,9 @@ export function createHandler({db,blobs,adminPassword}:Deps){
  }
  return json({error:'Ação inválida.'},400);
  }catch(e){
-  const code=(e as any)?.code;
-  if(code&&code!=='23505')console.error(e);
-  return json({error:code==='23505'?'Este ID já está cadastrado.':code?'Não foi possível salvar. Tente novamente.':e instanceof Error?e.message:'Falha inesperada.'},code&&code!=='23505'?500:400);
+  if(e instanceof UserError)return json({error:e.message},400);
+  if((e as any)?.code==='23505')return json({error:'Este ID já está cadastrado.'},400);
+  console.error(e);
+  return json({error:'Não foi possível concluir agora. Tente novamente.'},500);
  }};
 }

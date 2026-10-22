@@ -40,7 +40,7 @@ ok(await call({action:'role',id:'200',role:'instrutor',password:'senha-instrutor
 const wrongForm=await call({action:'login',id:'200',name:'Instrutor QA'});assert.equal(wrongForm.status,401);assert.match(wrongForm.body.error,/Acesso de instrutores/);
 assert.equal(ok(await call({action:'staff-login',user:'200',password:'  senha-instrutor  '}),'senha com espaços').status,200);
 const typo=await call({action:'staff-login',user:'200',password:'errada'});assert.equal(typo.status,401);assert.match(typo.body.error,/Restam 4/);
-await pg.query(`UPDATE settings SET value=$1 WHERE key='lock:200'`,[JSON.stringify({n:4,until:0,last:Date.now()-16*60000})]);
+await pg.query(`UPDATE settings SET value=$1 WHERE key LIKE 'lock:200:%'`,[JSON.stringify({n:4,until:0,last:Date.now()-16*60000})]);
 assert.match((await call({action:'staff-login',user:'200',password:'errada'})).body.error,/Restam 4/);
 ok(await call({action:'staff-login',user:'200',password:'senha-instrutor'}),'login após erros');
 const instructor=ok(await call({action:'staff-login',user:'200',password:'senha-instrutor'}),'login instrutor').cookie;
@@ -125,6 +125,8 @@ assert.equal(exam.questions[0].answer,undefined);assert.equal(typeof exam.deadli
 assert.equal((await call({action:'exam',course},{cookie:instructor})).body.id,exam.id);
 await pg.query(`UPDATE attempts SET started=$1 WHERE member='200'`,[Date.now()-901000]);
 const expired=await call({action:'submit',course,attempt:exam.id,answers:[0]},{cookie:instructor});assert.equal(expired.body.passed,false);assert.equal(expired.body.score,0);
+assert.match((await call({action:'exam',course},{cookie:instructor})).body.error,/Aguarde 10 minuto/);
+await pg.query(`UPDATE attempts SET submitted=$1 WHERE member='200'`,[Date.now()-601000]);
 const retry=ok(await call({action:'exam',course},{cookie:instructor}),'retry').body;assert.notEqual(retry.id,exam.id);
 const passed=await call({action:'submit',course,attempt:retry.id,answers:[0]},{cookie:instructor});assert.equal(passed.body.passed,true);assert.equal(passed.body.score,100);
 assert.equal((await call({action:'submit',course,attempt:retry.id,answers:[0]},{cookie:instructor})).status,400);
@@ -204,4 +206,60 @@ const weak=createHandler({db:pgliteDb(new PGlite()),blobs:memoryBlobs(),adminPas
 const weakLogin=await weak(new Request(base+'/api/portal',{method:'POST',headers:{origin:base,'content-type':'application/json'},body:JSON.stringify({action:'staff-login',user:'admin',password:'curta'})}));
 assert.equal(weakLogin.status,401);
 
-console.log('Todos os testes passaram.');
+// ===== Segurança: tentativas de ataque comuns =====
+const secDb=new PGlite(),secBlobs=memoryBlobs();
+const sec=createHandler({db:pgliteDb(secDb),blobs:secBlobs,adminPassword:ADMIN});
+const sreq=async(body,{ip='10.9.0.1',cookie,raw,type='application/json'}={})=>{const r=await sec(new Request(base+'/api/portal',{method:'POST',headers:{origin:base,'x-forwarded-for':ip,'content-type':type,...(cookie?{cookie}:{})},body:raw??JSON.stringify(body)}));return {status:r.status,body:await r.json(),cookie:r.headers.get('set-cookie')?.split(';')[0],headers:r.headers}};
+// Requisições malformadas não revelam detalhes internos
+for(const raw of ['null','[]','{oops','"texto"','{"action":5}']){const r=await sreq(null,{raw});assert.equal(r.status,400,raw);assert.equal(r.body.error,'Requisição inválida.',raw)}
+assert.equal((await sreq({action:'report'})).headers.get('x-content-type-options'),'nosniff');
+// Erro inesperado do banco vira mensagem genérica (sem detalhes)
+const broken=createHandler({db:{query:async()=>{throw new Error('detalhe interno do servidor: tabela X')}},blobs:memoryBlobs(),adminPassword:ADMIN});
+const brokenRes=await broken(new Request(base+'/api/portal'));assert.equal(brokenRes.status,500);assert.doesNotMatch(JSON.stringify(await brokenRes.json()),/tabela X/);
+// Injeção de SQL e de script ficam guardadas como texto comum
+const secAdmin=(await sreq({action:'staff-login',user:'admin',password:ADMIN},{ip:'10.9.9.9'})).cookie;
+ok(await sreq({action:'member',id:"1'; DROP TABLE members;--",name:"<script>alert(1)</script>"},{cookie:secAdmin}),'payload como texto');
+const secState=await (await sec(new Request(base+'/api/portal',{headers:{cookie:secAdmin}}))).json();
+assert.equal(secState.members[0].name,'<script>alert(1)</script>');assert.equal(secState.members[0].id,"1'; DROP TABLE members;--");
+ok(await sreq({action:'login',id:"1'; DROP TABLE members;--",name:'<script>alert(1)</script>'},{ip:'10.9.0.50'}),'login com payload exato');
+assert.equal((await sreq({action:'login',id:"' OR '1'='1",name:"' OR '1'='1"},{ip:'10.9.0.51'})).status,401);
+// ID duplicado só mudando maiúsculas é recusado
+ok(await sreq({action:'member',id:'AB12',name:'Caso Teste'},{cookie:secAdmin}),'id AB12');
+assert.match((await sreq({action:'member',id:'ab12',name:'Outro'},{cookie:secAdmin})).body.error,/já está cadastrado/);
+// Força bruta no login de aluno: 30 tentativas por hora por conexão; outra conexão segue normal
+for(let i=0;i<30;i++)assert.equal((await sreq({action:'login',id:'x'+i,name:'Ninguém'},{ip:'10.9.1.1'})).status,401);
+assert.equal((await sreq({action:'login',id:'AB12',name:'Caso Teste'},{ip:'10.9.1.1'})).status,429);
+assert.equal((await sreq({action:'login',id:'AB12',name:'Caso Teste'},{ip:'10.9.1.2'})).status,200);
+// Bloqueio do admin por conexão: o atacante se bloqueia, o admin verdadeiro continua entrando
+for(let i=0;i<5;i++)assert.equal((await sreq({action:'staff-login',user:'admin',password:'chute'+i},{ip:'10.9.2.1'})).status,401);
+assert.equal((await sreq({action:'staff-login',user:'admin',password:ADMIN},{ip:'10.9.2.1'})).status,429);
+assert.equal((await sreq({action:'staff-login',user:'admin',password:ADMIN},{ip:'10.9.2.2'})).status,200);
+// Limite geral de tentativas de login de instrutor por conexão (mesmo trocando de usuário)
+for(let i=0;i<20;i++)await sreq({action:'staff-login',user:'u'+i,password:'x'},{ip:'10.9.3.1'});
+assert.equal((await sreq({action:'staff-login',user:'outro',password:'x'},{ip:'10.9.3.1'})).status,429);
+// Instrutor inexistente demora o mesmo que um existente (não revela quais IDs existem)
+const tFake=performance.now();await sreq({action:'staff-login',user:'naoexiste',password:'x'},{ip:'10.9.4.1'});const fakeMs=performance.now()-tFake;
+assert.ok(fakeMs>20,'verificação de senha também roda para usuário inexistente');
+// Anexo: partes fora de ordem são recusadas
+const orphan=crypto.randomUUID(),part=(i,bytes,ip='10.9.5.1')=>{const f=new FormData();f.set('action','report-upload');f.set('upload',orphan);f.set('index',String(i));f.set('chunk',new Blob([bytes]));return sec(new Request(base+'/api/portal',{method:'POST',headers:{origin:base,'x-forwarded-for':ip},body:f})).then(async r=>({status:r.status,body:await r.json()}))};
+assert.match((await part(1,png)).body.error,/desde o começo/);
+assert.equal((await part(0,png)).status,200);
+// Questão gigante é recusada; convite inválido do Discord dá mensagem clara
+assert.match((await sreq({action:'course-edit',course:'x',title:'Teste',pages:1,pass:70,questions:JSON.stringify([{text:'a'.repeat(600),options:['A','B','C','D'],answer:0}])},{cookie:secAdmin})).body.error,/não encontrado/);
+assert.match((await sreq({action:'settings',discord:'isto não é link'},{cookie:secAdmin})).body.error,/convite HTTPS/);
+// Faxina: anexo abandonado há mais de 24 h e sessão vencida são apagados
+await secDb.query(`UPDATE settings SET value=$1 WHERE key=$2`,[String(Date.now()-25*3600000),'pend:'+orphan]);
+await secDb.query(`INSERT INTO settings VALUES ('session:velha',$1)`,[JSON.stringify({id:'AB12',expires:Date.now()-1000})]);
+const sec2=createHandler({db:pgliteDb(secDb),blobs:secBlobs,adminPassword:ADMIN});
+await sec2(new Request(base+'/api/portal',{method:'POST',headers:{origin:base,'content-type':'application/json'},body:JSON.stringify({action:'logout'})}));
+assert.equal(await secBlobs.exists(`report-uploads/${orphan}/0`),false);
+assert.equal((await secDb.query(`SELECT COUNT(*)::int AS n FROM settings WHERE key IN ($1,'session:velha')`,['pend:'+orphan])).rows[0].n,0);
+// Código de IP do limite não é o hash simples do IP (tem segredo do servidor)
+const keys=(await secDb.query(`SELECT key FROM settings WHERE key LIKE 'rl:%'`)).rows.map(r=>r.key);
+const {sha256Hex}=await import('../server/passwords.ts');const hour=String(Math.floor(Date.now()/3600000));
+const plainHash=(await sha256Hex('rl:10.9.1.1:'+hour)).slice(0,24);assert.ok(keys.length>0);assert.equal(keys.some(k=>k.includes(plainHash)),false);
+// Anexos e PDFs saem com cabeçalhos de proteção
+const atts=JSON.parse((await (await sec(new Request(base+'/api/portal',{headers:{cookie:secAdmin}}))).json()).reports[0]?.attachments||'[]');
+assert.equal(atts.length,0);
+
+console.log('Todos os testes passaram (incluindo os de segurança).');
