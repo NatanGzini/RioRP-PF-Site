@@ -27,6 +27,8 @@ function mediaType(b:Uint8Array){
  if(ascii(4,'ftyp'))return ascii(8,'qt  ')?'video/quicktime':'video/mp4';
  return null;
 }
+// Destaque da página inicial: notícia editável pelos instrutores. Este é o conteúdo usado até a primeira edição.
+export const DEFAULT_HIGHLIGHT={active:true,tag:'Operação Traíra',title:'PF prende Andrex',text:'Em ação coordenada da Polícia Federal de RIO RP, a Operação Traíra cumpriu mandado de prisão contra Andrex. A investigação segue em andamento. Informações sobre o caso podem ser enviadas pelo canal de denúncia anônima.',date:'',stamp:'PRESO'};
 const STUDENT_SESSION=604800000,STAFF_SESSION=43200000,LOCK_AFTER=5,LOCK_TIME=600000,LOCK_WINDOW=900000;
 
 const json=(v:unknown,status=200)=>Response.json(v,{status,headers:{'Cache-Control':'no-store'}});
@@ -63,6 +65,7 @@ export function createHandler({db,blobs,adminPassword}:Deps){
   else me=await first("SELECT id,name,role FROM members WHERE id=? AND role IN ('aluno','agente')",session.id);
  }}
  const instructor=me?.role==='instrutor';
+ const readHighlight=async()=>{const row=await first("SELECT value FROM settings WHERE key='highlight'");try{return row?JSON.parse(row.value):DEFAULT_HIGHLIGHT}catch{return DEFAULT_HIGHLIGHT}};
  // Limite por conexão e por hora para envios anônimos. Guarda só um código derivado do IP que muda a cada hora,
  // nunca o IP, e nada é ligado à denúncia: serve apenas para conter spam.
  const withinLimit=async(kind:string,max:number)=>{
@@ -118,7 +121,7 @@ export function createHandler({db,blobs,adminPassword}:Deps){
   // Resumo para o painel de membros: páginas lidas por material e situação das provas, com total de alertas.
   const readingSummary=instructor?await all('SELECT member,course,SUM(done)::int AS done,MAX(last) AS last FROM reading GROUP BY member,course'):[];
   const examSummary=instructor?await all('SELECT a.member,a.course,COUNT(*)::int AS attempts,MAX(a.score) AS best,MAX(a.passed) AS passed,(SELECT COUNT(*)::int FROM exam_events e WHERE e.member=a.member AND e.course=a.course) AS alerts FROM attempts a GROUP BY a.member,a.course'):[];
-  return json({me,admin,configured:adminConfigured,discord:(await first("SELECT value FROM settings WHERE key='discord'"))?.value||'',courses,progress,exams,members:instructor?await all('SELECT id,name,role,created FROM members ORDER BY created DESC'):[],readingSummary,examSummary,reports:instructor?await all('SELECT * FROM reports ORDER BY created DESC LIMIT 100'):[]});
+  return json({me,admin,configured:adminConfigured,discord:(await first("SELECT value FROM settings WHERE key='discord'"))?.value||'',highlight:await readHighlight(),courses,progress,exams,members:instructor?await all('SELECT id,name,role,created FROM members ORDER BY created DESC'):[],readingSummary,examSummary,reports:instructor?await all('SELECT * FROM reports ORDER BY created DESC LIMIT 100'):[]});
  }
  if(req.method!=='POST')return json({error:'Método não permitido.'},405);
  if(req.headers.get('origin')!==url.origin)return json({error:'Origem inválida.'},403);
@@ -199,7 +202,7 @@ export function createHandler({db,blobs,adminPassword}:Deps){
   await run('INSERT INTO exam_events VALUES (?,?,?,?,?,?)',crypto.randomUUID(),a.id,me.id,a.course,type,now);
   return json({ok:true});
  }
- if(['member','role','upload','course','settings','course-edit','course-delete','member-remove','report-delete'].includes(b.action)){
+ if(['member','role','upload','course','settings','course-edit','course-delete','member-remove','report-delete','highlight'].includes(b.action)){
   if(!instructor)return json({error:'Apenas instrutores podem realizar esta ação.'},403);
   if(b.action==='report-delete'){
    const r=await first('SELECT id,attachments FROM reports WHERE id=?',str(b.report,1,60));if(!r)fail('Denúncia não encontrada.');
@@ -232,6 +235,12 @@ export function createHandler({db,blobs,adminPassword}:Deps){
    await run('DELETE FROM settings WHERE key=?','active:'+id);
    for(const s of await all("SELECT key,value FROM settings WHERE key LIKE 'session:%'")){let owner;try{owner=JSON.parse(s.value).id}catch{}if(owner===id)await run('DELETE FROM settings WHERE key=?',s.key)}
    return json({message:`Matrícula de ${target.name} (ID ${id}) removida, com todo o histórico de leitura e provas.`});
+  }
+  if(b.action==='highlight'){
+   const opt=(v:unknown,max:number)=>typeof v==='string'&&v.length<=max?v.trim():fail('Revise os campos do destaque.');
+   const value={active:!!b.active,tag:opt(b.tag,40),title:str(b.title,3,80),text:opt(b.text,400),date:opt(b.date,40),stamp:opt(b.stamp,14)};
+   await run("INSERT INTO settings VALUES ('highlight',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",JSON.stringify(value));
+   return json({message:value.active?'Destaque atualizado na página inicial.':'Destaque salvo e escondido da página inicial.'});
   }
   if(b.action==='settings'){
    const discord=new URL(str(b.discord));if(discord.protocol!=='https:'||!['discord.gg','discord.com'].includes(discord.hostname))fail('Informe um convite HTTPS do Discord.');

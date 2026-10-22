@@ -22,6 +22,9 @@ assert.equal((await call({action:'member',id:'1',name:'Teste'})).status,401);
 assert.equal((await call({action:'report'},{origin:'https://invalido.test'})).status,403);
 assert.equal((await call({action:'report',organization:'QA',location:'QA',details:'Curto'})).status,400);
 
+// Destaque da página inicial: padrão visível a todos; só instrutores editam
+assert.equal((await state()).highlight.title,'PF prende Andrex');assert.equal((await state()).highlight.active,true);
+
 // Administrador
 assert.equal((await call({action:'staff-login',user:'admin',password:'errada'})).status,401);
 const admin=ok(await call({action:'staff-login',user:'ADMIN',password:ADMIN}),'login admin').cookie;
@@ -57,6 +60,13 @@ const tampered=student.slice(0,-1)+(student.endsWith('a')?'b':'a');assert.equal(
 const report=ok(await call({action:'report',organization:'Org QA',location:'Ambiente de testes',details:'Relato fictício de teste automatizado, sem envolvidos reais.'}),'denúncia');
 assert.match(report.body.message,/Protocolo/);
 assert.equal((await state(instructor)).reports.length,1);
+
+const novoDestaque={action:'highlight',active:true,tag:'Operação Teste',title:'Manchete de teste',text:'Texto curto.',date:'22/10/2026',stamp:'PRESO'};
+assert.equal((await call(novoDestaque,{cookie:student})).status,403);
+assert.equal((await call(novoDestaque)).status,401);
+assert.equal((await call({...novoDestaque,title:'x'},{cookie:instructor})).status,400);
+ok(await call(novoDestaque,{cookie:instructor}),'editar destaque');assert.equal((await state()).highlight.title,'Manchete de teste');
+ok(await call({...novoDestaque,active:false},{cookie:instructor}),'esconder destaque');assert.equal((await state()).highlight.active,false);
 
 // Denúncia com anexos: imagem (1 parte) e vídeo (2 partes); só instrutores veem; apagar remove tudo
 const sendPart=(upload,index,bytes,ip='10.0.0.1')=>{const f=new FormData();f.set('action','report-upload');f.set('upload',upload);f.set('index',String(index));f.set('chunk',new Blob([bytes]));return call(f,{ip})};

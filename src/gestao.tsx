@@ -1,6 +1,7 @@
 // Central dos instrutores: membros (com ficha de leitura, provas e alertas), materiais, cadastro e denúncias.
 import {useState} from 'react';
-import {Users,BookOpen,Plus,Settings,ClipboardList,Check,Search,Pencil,ChevronLeft,AlertTriangle,X} from 'lucide-react';
+import {Users,BookOpen,Plus,Settings,ClipboardList,Check,Search,Pencil,ChevronLeft,AlertTriangle,X,Megaphone} from 'lucide-react';
+import {HighlightEditor} from './destaque';
 
 type Course={id:string;title:string;kind:string;pages:number;pass:number};
 type Props={data:any;busy:boolean;error:string;discord:string;
@@ -68,7 +69,7 @@ export default function Gestao({data,busy,error,discord,action,api,refresh,setBu
  };
  const members=data.members.filter((m:any)=>(roleFilter==='todos'||m.role===roleFilter)&&(m.name+' '+m.id).toLowerCase().includes(query.trim().toLowerCase()));
 
- const tabs=[['membros','Membros',Users],['materiais','Materiais',BookOpen],['cadastro','Cadastro e comunidade',Settings],['denuncias','Denúncias',ClipboardList]] as const;
+ const tabs=[['membros','Membros',Users],['materiais','Materiais',BookOpen],['cadastro','Cadastro e comunidade',Settings],['denuncias','Denúncias',ClipboardList],['destaque','Destaque',Megaphone]] as const;
  return <section className="inner"><div className="eyebrow">ACESSO DOS INSTRUTORES</div><h1>Central da academia.</h1><p className="lead">Acompanhe os membros, gerencie materiais e consulte as informações recebidas.</p>
  <div className="subtabs" role="tablist">{tabs.map(([id,label,Icon])=><button key={id} role="tab" aria-selected={view===id} className={view===id?'active':''} onClick={()=>{setView(id);setFicha(null);setEditing(null);setError('');refresh()}}><Icon size={16}/>{label}{id==='membros'&&<span className="count">{data.members.length}</span>}{id==='denuncias'&&!!data.reports.length&&<span className="count">{data.reports.length}</span>}</button>)}</div>
 
@@ -112,6 +113,7 @@ export default function Gestao({data,busy,error,discord,action,api,refresh,setBu
  {view==='denuncias'&&<section className="panel form"><h2><ClipboardList size={23}/> Denúncias recebidas <span className="count">{data.reports.length}</span></h2>{!data.reports.length?<p>Nenhum relato recebido.</p>:data.reports.map((r:any)=>{const files:any[]=r.attachments?JSON.parse(r.attachments):[];return <details className="report" key={r.id}><summary>{r.organization}{!!files.length&&<span className="count">{files.length} anexo(s)</span>} <span>{date(r.created)}</span></summary><p><b>Local:</b> {r.location}</p><p className="preserve">{r.details}</p>
   {!!files.length&&<div className="report-media">{files.map((a,n)=>{const src=`/api/portal?action=attachment&report=${encodeURIComponent(r.id)}&n=${n}`;return a.type.startsWith('image')?<a key={n} href={src} target="_blank" rel="noreferrer" title="Abrir em tamanho real"><img src={src} alt={a.name} loading="lazy"/></a>:<figure key={n}><video src={src} controls preload="none"/><figcaption>{a.name}</figcaption></figure>})}</div>}
   <div className="report-actions"><small>Protocolo {r.id.slice(0,8).toUpperCase()}</small><Confirm busy={busy} label="Apagar denúncia" confirm="Apagar o relato e os anexos?" onConfirm={()=>action({action:'report-delete',report:r.id})}/></div></details>})}</section>}
+ {view==='destaque'&&<HighlightEditor key={JSON.stringify(data.highlight)} current={data.highlight} busy={busy} action={action}/>}
  </section>;
 }
 
