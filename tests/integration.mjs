@@ -262,4 +262,19 @@ const plainHash=(await sha256Hex('rl:10.9.1.1:'+hour)).slice(0,24);assert.ok(key
 const atts=JSON.parse((await (await sec(new Request(base+'/api/portal',{headers:{cookie:secAdmin}}))).json()).reports[0]?.attachments||'[]');
 assert.equal(atts.length,0);
 
-console.log('Todos os testes passaram (incluindo os de segurança).');
+// ===== LGPD =====
+// "Meus dados": só com login, só os dados do próprio membro, como arquivo para baixar
+assert.equal((await sec(new Request(base+'/api/portal?action=my-data'))).status,401);
+const ab12=(await sreq({action:'login',id:'AB12',name:'Caso Teste'},{ip:'10.9.6.1'})).cookie;
+const mine=await sec(new Request(base+'/api/portal?action=my-data',{headers:{cookie:ab12}}));
+assert.equal(mine.status,200);assert.match(mine.headers.get('content-disposition'),/attachment/);
+const mineBody=await mine.json();assert.equal(mineBody.matricula.id,'AB12');assert.equal(mineBody.matricula.nome_do_personagem,'Caso Teste');
+assert.ok(Array.isArray(mineBody.leitura)&&Array.isArray(mineBody.provas));assert.doesNotMatch(JSON.stringify(mineBody),/DROP TABLE/);
+// Prazo de guarda: denúncia com mais de 12 meses é apagada na faxina
+await secDb.query(`INSERT INTO reports (id,organization,location,details,created,attachments) VALUES ('antiga','Org','Local','Relato antigo de teste com mais de um ano.',$1,'[]')`,[Date.now()-366*86400000]);
+await secDb.query(`INSERT INTO reports (id,organization,location,details,created,attachments) VALUES ('recente','Org','Local','Relato recente de teste, dentro do prazo.',$1,'[]')`,[Date.now()-10*86400000]);
+const sec3=createHandler({db:pgliteDb(secDb),blobs:secBlobs,adminPassword:ADMIN});
+await sec3(new Request(base+'/api/portal',{method:'POST',headers:{origin:base,'content-type':'application/json'},body:JSON.stringify({action:'logout'})}));
+assert.deepEqual((await secDb.query(`SELECT id FROM reports WHERE id IN ('antiga','recente') ORDER BY id`)).rows.map(r=>r.id),['recente']);
+
+console.log('Todos os testes passaram (incluindo os de segurança e LGPD).');

@@ -32,6 +32,8 @@ export const DEFAULT_HIGHLIGHT={active:true,tag:'Operação Traíra',title:'PF p
 const STUDENT_SESSION=604800000,STAFF_SESSION=43200000,LOCK_AFTER=5,LOCK_TIME=600000,LOCK_WINDOW=900000;
 // Limites por conexão e por hora (anti-força bruta e anti-spam) e espera entre tentativas de prova reprovadas.
 const LIMITS={login:30,staff:20,report:6,upload:45},EXAM_COOLDOWN=600000,HOUSEKEEPING_EVERY=3600000,ORPHAN_AGE=86400000;
+// LGPD: denúncias têm prazo de guarda; passado esse prazo são apagadas com os anexos.
+export const REPORT_RETENTION=365*86400000;
 
 // Só mensagens criadas com fail() chegam ao usuário; qualquer outro erro vira uma mensagem genérica (sem detalhes internos).
 class UserError extends Error{}
@@ -61,6 +63,10 @@ export function createHandler({db,blobs,adminPassword}:Deps){
  // Hash de uma senha qualquer, usado quando o instrutor não existe: a resposta demora o mesmo e não revela quais IDs existem.
  let dummyHash:Promise<string>|undefined;
  const dummy=()=>dummyHash??=hashPassword(crypto.randomUUID());
+ const deleteReport=async(r:{id:string;attachments:string|null})=>{
+  for(const at of r.attachments?JSON.parse(r.attachments):[]){for(let i=0;i<at.parts;i++)await blobs.delete(`report-uploads/${at.upload}/${i}`);await run('DELETE FROM settings WHERE key=?','upl:'+at.upload)}
+  await run('DELETE FROM reports WHERE id=?',r.id);
+ };
  // Faxina periódica (no máximo 1x por hora por instância): anexos abandonados, sessões vencidas e bloqueios antigos.
  let lastHousekeeping=0;
  const housekeeping=async()=>{
@@ -72,6 +78,7 @@ export function createHandler({db,blobs,adminPassword}:Deps){
     else if(r.key.startsWith('session:')&&v?.expires<=now)await run('DELETE FROM settings WHERE key=?',r.key);
     else if(r.key.startsWith('lock:')&&now-(v?.last||0)>ORPHAN_AGE)await run('DELETE FROM settings WHERE key=?',r.key);
    }
+   for(const r of await all('SELECT id,attachments FROM reports WHERE created<?',now-REPORT_RETENTION))await deleteReport(r);
   }catch(e){console.error(e)}
  };
 
@@ -134,6 +141,21 @@ export function createHandler({db,blobs,adminPassword}:Deps){
    const body=new ReadableStream({async pull(c){if(i>=a.parts){c.close();return}const part=await blobs.buffer(`report-uploads/${a.upload}/${i++}`);if(part)c.enqueue(new Uint8Array(part));else c.close()}});
    // sandbox: mesmo que alguém abra o anexo direto no navegador, nada nele pode rodar como parte do site.
    return new Response(body,{headers:{...base,'Content-Type':a.type,'Cache-Control':'private, max-age=3600','Content-Disposition':`inline; filename="${a.name.replace(/"/g,'')}"`,'Content-Security-Policy':"default-src 'none'; img-src 'self'; media-src 'self'; style-src 'unsafe-inline'; sandbox"}});
+  }
+  // LGPD (acesso e portabilidade): o próprio membro baixa tudo o que o portal guarda sobre o personagem dele.
+  if(url.searchParams.get('action')==='my-data'){
+   if(!me)return json({error:'Entre na Academia para baixar seus dados.'},401);
+   const m=admin?null:await first('SELECT id,name,role,created FROM members WHERE id=?',me.id);
+   const reading=await all('SELECT c.title,r.page,r.seconds,r.done,r.last FROM reading r LEFT JOIN courses c ON c.id=r.course WHERE r.member=? ORDER BY c.title,r.page',me.id);
+   const attempts=await all('SELECT a.id,c.title,a.started,a.submitted,a.score,a.passed FROM attempts a LEFT JOIN courses c ON c.id=a.course WHERE a.member=? ORDER BY a.started',me.id);
+   const events=await all('SELECT attempt,type,at FROM exam_events WHERE member=? ORDER BY at',me.id);
+   const iso=(t:number|null)=>t?new Date(Number(t)).toISOString():null;
+   const data={gerado_em:iso(now),controlador:'Polícia Federal de RIO RP (corporação fictícia do servidor de roleplay RIO RP)',
+    matricula:m?{id:m.id,nome_do_personagem:m.name,cargo:m.role,cadastrado_em:iso(m.created)}:{id:me.id,cargo:'administrador'},
+    leitura:reading.map((r:any)=>({material:r.title,pagina:r.page,segundos_lidos:r.seconds,pagina_concluida:!!r.done,ultimo_acesso:iso(r.last)})),
+    provas:attempts.map((a:any)=>({material:a.title,inicio:iso(a.started),envio:iso(a.submitted),nota:a.score,aprovado:!!a.passed,registros_de_integridade:events.filter((e:any)=>e.attempt===a.id).map((e:any)=>({tipo:e.type,quando:iso(e.at)}))})),
+    observacao:'Denúncias anônimas não são ligadas a nenhuma matrícula e por isso não aparecem aqui. Para corrigir ou excluir dados, fale com os instrutores no Discord da corporação.'};
+   return new Response(JSON.stringify(data,null,2),{headers:{...base,'Content-Type':'application/json; charset=utf-8','Content-Disposition':'attachment; filename="meus-dados.json"'}});
   }
   if(url.searchParams.get('action')==='course'){
    if(!instructor)return json({error:'Apenas instrutores.'},403);
@@ -241,8 +263,7 @@ export function createHandler({db,blobs,adminPassword}:Deps){
   if(!instructor)return json({error:'Apenas instrutores podem realizar esta ação.'},403);
   if(b.action==='report-delete'){
    const r=await first('SELECT id,attachments FROM reports WHERE id=?',str(b.report,1,60));if(!r)fail('Denúncia não encontrada.');
-   for(const at of r.attachments?JSON.parse(r.attachments):[]){for(let i=0;i<at.parts;i++)await blobs.delete(`report-uploads/${at.upload}/${i}`);await run('DELETE FROM settings WHERE key=?','upl:'+at.upload)}
-   await run('DELETE FROM reports WHERE id=?',r.id);
+   await deleteReport(r);
    return json({message:'Denúncia apagada, com os anexos.'});
   }
   if(b.action==='member'){
