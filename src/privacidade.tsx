@@ -8,8 +8,7 @@ const NOTICE_KEY='pf-cookies-aviso';
 export function PrivacyPolicy({discord}:{discord:string}){
  const contact=<a className="text-link" href={discord} target="_blank" rel="noreferrer">Discord da corporação</a>;
  return <section className="inner narrow privacy">
-  <div className="eyebrow">TRANSPARÊNCIA · LGPD</div>
-  <h1>Privacidade<br/><em>e cookies.</em></h1>
+  <h1>Privacidade e cookies</h1>
   <p className="lead">Como o portal da Polícia Federal de RIO RP trata as suas informações, de acordo com a Lei Geral de Proteção de Dados (Lei nº 13.709/2018). Última atualização: {UPDATED}.</p>
 
   <h2>1. Quem somos</h2>

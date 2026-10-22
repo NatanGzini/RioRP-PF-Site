@@ -44,7 +44,7 @@ export default function ReportForm({busy,setBusy,setError,setNotice,api,refresh}
   <label>O que aconteceu?<textarea name="details" aria-describedby="details-help" minLength={30} maxLength={5000} required rows={6} placeholder="Descreva o que presenciou, o local, o horário e os envolvidos no RP. "/></label>
   <p id="details-help" className="muted">Escreva pelo menos 30 caracteres. Inclua local, horário e fatos ocorridos no RP, sem informar seus dados pessoais.</p>
   <div className="attach-box">
-   <div className="attach-head"><div><b>Prints e vídeos</b> <span className="muted">(opcional · até 4 arquivos de 15 MB)</span></div><button type="button" className="button outline" disabled={busy||files.length>=MAX_FILES} onClick={()=>picker.current?.click()}><Paperclip size={16}/> Anexar arquivo</button></div>
+   <div className="attach-head"><div><b>Prints e vídeos</b> <span className="muted">Opcional. Até 4 arquivos de 15 MB cada.</span></div><button type="button" className="button outline" disabled={busy||files.length>=MAX_FILES} onClick={()=>picker.current?.click()}><Paperclip size={16}/> Anexar arquivo</button></div>
    <input ref={picker} type="file" accept={ACCEPT} multiple hidden onChange={e=>add(e.target.files)}/>
    {!!files.length&&<ul className="attach-list">{files.map((f,i)=><li key={i}>{f.type.startsWith('video')?<Film size={16}/>:<ImageIcon size={16}/>}<span>{f.name}</span><small>{size(f.size)}</small><button type="button" aria-label={'Remover '+f.name} disabled={busy} onClick={()=>setFiles(files.filter((_,j)=>j!==i))}><X size={15}/></button></li>)}</ul>}
    <p className="attach-tip"><b>Proteja seu anonimato:</b> antes de anexar, corte do print ou do vídeo o seu nome, ID, chat, celular do jogo e qualquer coisa que mostre quem você é.</p>

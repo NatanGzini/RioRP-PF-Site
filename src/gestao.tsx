@@ -10,7 +10,7 @@ type Props={data:any;busy:boolean;error:string;discord:string;
 
 const CHUNK_SIZE=3*1024*1024; // igual a server/handler.ts: cada envio fica abaixo do limite de 6 MB das funções Netlify
 const ROLE:Record<string,string>={aluno:'Aluno',agente:'Agente',instrutor:'Instrutor'};
-const KIND:Record<string,string>={biblia:'Bíblia Geral · alunos',curso:'Curso · prova online',leitura:'Apostila · avaliação in game'};
+const KIND:Record<string,string>={biblia:'Bíblia Geral, para alunos',curso:'Curso com prova online',leitura:'Apostila com avaliação in game'};
 const EVENT:Record<string,string>={copy:'Copiou',cut:'Recortou',paste:'Colou',hidden:'Saiu da aba / minimizou',blur:'Trocou de janela'};
 const date=(t?:number)=>t?new Date(t).toLocaleString('pt-BR',{dateStyle:'short',timeStyle:'short'}):'—';
 const minutes=(s:number)=>s<60?`${s}s`:`${Math.round(s/60)} min`;
@@ -70,7 +70,7 @@ export default function Gestao({data,busy,error,discord,action,api,refresh,setBu
  const members=data.members.filter((m:any)=>(roleFilter==='todos'||m.role===roleFilter)&&(m.name+' '+m.id).toLowerCase().includes(query.trim().toLowerCase()));
 
  const tabs=[['membros','Membros',Users],['materiais','Materiais',BookOpen],['cadastro','Cadastro e comunidade',Settings],['denuncias','Denúncias',ClipboardList],['destaque','Destaque',Megaphone]] as const;
- return <section className="inner"><div className="eyebrow">ACESSO DOS INSTRUTORES</div><h1>Central da academia.</h1><p className="lead">Acompanhe os membros, gerencie materiais e consulte as informações recebidas.</p>
+ return <section className="inner"><h1>Central dos instrutores</h1><p className="lead">Membros, materiais, denúncias e o destaque da página inicial.</p>
  <div className="subtabs" role="tablist">{tabs.map(([id,label,Icon])=><button key={id} role="tab" aria-selected={view===id} className={view===id?'active':''} onClick={()=>{setView(id);setFicha(null);setEditing(null);setError('');refresh()}}><Icon size={16}/>{label}{id==='membros'&&<span className="count">{data.members.length}</span>}{id==='denuncias'&&!!data.reports.length&&<span className="count">{data.reports.length}</span>}</button>)}</div>
 
  {view==='membros'&&!ficha&&<section className="panel form">
@@ -80,7 +80,7 @@ export default function Gestao({data,busy,error,discord,action,api,refresh,setBu
 
  {view==='membros'&&ficha&&<section className="panel form ficha">
   <button className="back" onClick={()=>{setFicha(null);setInstructorForm(null)}}><ChevronLeft size={16}/> Todos os membros</button>
-  <div className="ficha-head"><div><h2>{ficha.member.name}</h2><p>ID {ficha.member.id} · <span className={'role role-'+ficha.member.role}>{ROLE[ficha.member.role]}</span> · cadastrado em {date(ficha.member.created)}</p></div>
+  <div className="ficha-head"><div><h2>{ficha.member.name}</h2><p>ID {ficha.member.id}, cadastrado em {date(ficha.member.created)} <span className={'role role-'+ficha.member.role}>{ROLE[ficha.member.role]}</span></p></div>
    <div className="table-actions">
     {ficha.member.role==='aluno'&&<button disabled={busy} onClick={()=>memberAction({action:'role',id:ficha.member.id,role:'agente'})}>Promover a agente</button>}
     {ficha.member.role==='agente'&&<button disabled={busy} onClick={()=>memberAction({action:'role',id:ficha.member.id,role:'aluno'})}>Voltar para aluno</button>}
@@ -91,12 +91,12 @@ export default function Gestao({data,busy,error,discord,action,api,refresh,setBu
   {instructorForm&&<form className="instructor-form" onSubmit={e=>{e.preventDefault();saveInstructor(e.currentTarget)}}><h3>{instructorForm.reset?'Nova senha para':'Nomear como instrutor:'} {instructorForm.name} <small>(ID {instructorForm.id})</small></h3><p>O instrutor vai entrar em <b>Academia → Acesso de instrutores</b>, com o usuário <b>{instructorForm.id}</b> e esta senha. Combine a senha com ele pessoalmente ou por mensagem privada.</p><div className="form-columns"><label>Senha (mínimo 8 caracteres)<input name="password" autoFocus type={showPassword?'text':'password'} required minLength={8} maxLength={200} autoComplete="new-password" autoCapitalize="off" autoCorrect="off" spellCheck={false}/></label><label>Repita a senha<input name="confirm" type={showPassword?'text':'password'} required minLength={8} maxLength={200} autoComplete="new-password" autoCapitalize="off" autoCorrect="off" spellCheck={false}/></label></div><label className="radio"><input type="checkbox" checked={showPassword} onChange={e=>setShowPassword(e.target.checked)}/>Mostrar senha</label>{error&&<p role="alert" className="modal-error">{error}</p>}<div className="modal-actions"><button type="button" className="button outline" onClick={()=>setInstructorForm(null)}>Cancelar</button><button className="button gold" disabled={busy}>{instructorForm.reset?'Salvar nova senha':'Nomear instrutor'} <Check size={17}/></button></div></form>}
 
   <h3>Leitura dos materiais</h3>
-  {!visible(courses,ficha.member.role).length?<p>Nenhum material disponível para este cargo.</p>:<div className="table-scroll"><table><thead><tr><th>Material</th><th>Progresso</th><th>Tempo de leitura</th><th>Último acesso</th></tr></thead><tbody>{visible(courses,ficha.member.role).map(c=>{const r=ficha.reading.find((x:any)=>x.course===c.id),p=Math.min(100,Math.round(100*(r?.done||0)/c.pages));return <tr key={c.id}><td>{c.title}<small className="muted-block">{KIND[c.kind]}</small></td><td><div className="mini-progress"><div className="progress" role="progressbar" aria-valuenow={p} aria-valuemin={0} aria-valuemax={100}><i style={{width:p+'%'}}/></div><span className={p===100?'ok':''}>{p}% · {r?.done||0}/{c.pages} pág.</span></div></td><td>{r?minutes(r.seconds):'—'}</td><td>{date(r?.last)}</td></tr>})}</tbody></table></div>}
+  {!visible(courses,ficha.member.role).length?<p>Nenhum material disponível para este cargo.</p>:<div className="table-scroll"><table><thead><tr><th>Material</th><th>Progresso</th><th>Tempo de leitura</th><th>Último acesso</th></tr></thead><tbody>{visible(courses,ficha.member.role).map(c=>{const r=ficha.reading.find((x:any)=>x.course===c.id),p=Math.min(100,Math.round(100*(r?.done||0)/c.pages));return <tr key={c.id}><td>{c.title}<small className="muted-block">{KIND[c.kind]}</small></td><td><div className="mini-progress"><div className="progress" role="progressbar" aria-valuenow={p} aria-valuemin={0} aria-valuemax={100}><i style={{width:p+'%'}}/></div><span className={p===100?'ok':''}>{p}% ({r?.done||0} de {c.pages} páginas)</span></div></td><td>{r?minutes(r.seconds):'—'}</td><td>{date(r?.last)}</td></tr>})}</tbody></table></div>}
 
   <h3>Provas e alertas de integridade</h3>
   <p className="muted">Durante a prova online, o site registra quando o aluno copia, recorta ou cola texto e quando sai da tela (troca de aba, minimiza ou muda de janela). Os registros são indícios para o instrutor avaliar, não uma prova automática de fraude.</p>
   {!ficha.attempts.length?<p>Nenhuma prova online realizada.</p>:ficha.attempts.map((a:any)=>{const c=courses.find(x=>x.id===a.course),status=a.submitted?(a.passed?'Aprovado':'Reprovado'):(Date.now()-a.started>900000?'Expirada':'Em andamento'),counts=a.events.reduce((o:any,e:any)=>({...o,[e.type]:(o[e.type]||0)+1}),{});
-   return <details className={'attempt'+(a.events.length?' flagged':'')} key={a.id}><summary><span><b>{c?.title||'Material apagado'}</b> · {date(a.started)}</span><span className={'status-'+status.toLowerCase().replace(' ','-')}>{status}{a.submitted?` · ${a.score}%`:''}</span>{a.events.length>0?<span className="alert-badge"><AlertTriangle size={12}/>{a.events.length} alerta(s)</span>:<span className="ok">Sem alertas</span>}</summary>
+   return <details className={'attempt'+(a.events.length?' flagged':'')} key={a.id}><summary><span><b>{c?.title||'Material apagado'}</b>, {date(a.started)}</span><span className={'status-'+status.toLowerCase().replace(' ','-')}>{status}{a.submitted?`, nota ${a.score}%`:''}</span>{a.events.length>0?<span className="alert-badge"><AlertTriangle size={12}/>{a.events.length} alerta(s)</span>:<span className="ok">Sem alertas</span>}</summary>
     {a.events.length>0&&<><div className="event-counts">{Object.entries(counts).map(([t,n])=><span key={t}>{EVENT[t]}: <b>{n as number}</b></span>)}</div><ol className="timeline">{a.events.map((e:any,i:number)=><li key={i}><time>{new Date(e.at).toLocaleTimeString('pt-BR')}</time> {EVENT[e.type]} <small>({Math.max(0,Math.round((e.at-a.started)/1000))}s após o início)</small></li>)}</ol></>}
    </details>})}
  </section>}
@@ -121,11 +121,11 @@ function MaterialForm({busy,material,onSubmit,onCancel}:{busy:boolean;material?:
  const [kind,setKind]=useState(material?.kind||'leitura');
  return <form key={material?.id||'novo'} onSubmit={e=>{e.preventDefault();onSubmit(e.currentTarget)}}>
   <div className="form-columns"><label>Título<input name="title" required minLength={3} maxLength={120} defaultValue={material?.title} placeholder="Ex.: Proteção de Dignitários"/></label>
-   <label>Tipo<select name="kind" value={kind} disabled={!!material} onChange={e=>setKind(e.target.value)}><option value="biblia">Bíblia Geral · alunos</option><option value="leitura">Apostila · agentes (sem prova, avaliação in game)</option><option value="curso">Curso · agentes (prova online)</option></select></label>
+   <label>Tipo<select name="kind" value={kind} disabled={!!material} onChange={e=>setKind(e.target.value)}><option value="biblia">Bíblia Geral (alunos)</option><option value="leitura">Apostila para agentes (avaliação in game)</option><option value="curso">Curso para agentes (prova online)</option></select></label>
    <label>Total de páginas<input type="number" name="pages" required min={1} max={500} defaultValue={material?.pages}/></label>
    <label>Nota mínima (%)<input type="number" name="pass" required min={1} max={100} defaultValue={material?.pass??70} disabled={kind!=='curso'}/></label></div>
   {kind!=='curso'&&<input type="hidden" name="pass" value={material?.pass??70}/>}
-  <label>{material?'Novo PDF (opcional) · até 20 MB':'Apostila em PDF · até 20 MB'}<input type="file" name="file" accept="application/pdf" required={!material}/></label>
+  <label>{material?'Novo PDF, opcional, até 20 MB':'Apostila em PDF, até 20 MB'}<input type="file" name="file" accept="application/pdf" required={!material}/></label>
   {kind==='curso'&&<><label>Questões da prova (JSON)<textarea name="questions" rows={6} defaultValue={material?.questions||'[]'} required spellCheck={false}/></label><details><summary>Como cadastrar as questões</summary><p>Use uma lista de questões, cada uma com quatro alternativas. O campo answer indica a alternativa correta: 0, 1, 2 ou 3.</p><pre>{JSON.stringify([{text:'Qual procedimento consta na apostila?',options:['Alternativa A','Alternativa B','Alternativa C','Alternativa D'],answer:0}],null,2)}</pre></details></>}
   <div className="modal-actions">{onCancel&&<button type="button" className="button outline" onClick={onCancel}><X size={16}/> Cancelar</button>}<button className="button gold" disabled={busy}>{material?<><Check size={17}/> Salvar alterações</>:<><Plus size={17}/> Publicar na academia</>}</button></div>
  </form>;

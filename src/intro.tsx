@@ -56,7 +56,7 @@ export default function Intro(){
    <img src="/brand/emblema-pf.png" alt="" width="451" height="566"/>
    <div className="intro-title">POLÍCIA FEDERAL</div>
    <div className="intro-line"/>
-   <div className="intro-tagline">SUPERINTENDÊNCIA · RIO RP</div>
+   <div className="intro-tagline">RIO RP</div>
    <span className="intro-grain"/>
   </div>}
   <button className="intro-skip" onClick={finish}>Pular</button>

@@ -1,16 +1,16 @@
 // Destaque da página inicial (notícia de operação) e o editor usado pelos instrutores no painel.
 import {useState} from 'react';
-import {ArrowRight,Check,Megaphone} from 'lucide-react';
+import {Check,Megaphone} from 'lucide-react';
 
 export type HighlightData={active:boolean;tag:string;title:string;text:string;date:string;stamp:string};
 
 export function Highlight({h,onDenuncia}:{h:HighlightData;onDenuncia?:()=>void}){
  return <section className="highlight" aria-label="Destaque">
   <div className="hl-card">
-   <div className="hl-tag"><span className="hl-live" aria-hidden="true"/><span>URGENTE</span>{h.tag&&<b>· {h.tag}</b>}</div>
+   <div className="hl-tag"><span className="hl-urgent">Urgente</span>{h.tag&&<span>{h.tag}</span>}</div>
    <h2>{h.title}</h2>
    {h.text&&<p>{h.text}</p>}
-   <div className="hl-foot"><span>{h.date?h.date+' · ':''}Polícia Federal · RIO RP</span>{onDenuncia&&<button className="text-link" onClick={onDenuncia}>Enviar informação anônima <ArrowRight size={16}/></button>}</div>
+   <div className="hl-foot"><span>{h.date?`Publicado em ${h.date}`:'Polícia Federal de RIO RP'}</span>{onDenuncia&&<button className="text-link" onClick={onDenuncia}>Enviar informação anônima</button>}</div>
    {h.stamp&&<div className="hl-stamp" aria-hidden="true">{h.stamp}</div>}
   </div>
  </section>;
